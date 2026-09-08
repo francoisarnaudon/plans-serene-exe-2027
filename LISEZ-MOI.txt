@@ -1,0 +1,94 @@
+VISIONNEUSE DE PLANS - mode d'emploi
+====================================
+
+POUR CONSULTER (votre collaborateur)
+------------------------------------
+Ouvrir index.html (double-clic), ou le lien s'il a ete publie.
+Aucun logiciel Autodesk, aucun compte, aucune installation.
+
+Les plans sont des PDF VECTORIELS : ils restent nets a n'importe quel zoom,
+meme sur les carnets de plusieurs metres de large. Rien a installer, aucune
+connexion : tout est dans le dossier.
+
+  - liste des plans a gauche (avec recherche)
+  - molette = zoom, glisser = deplacer, double-clic = ajuster
+  - bouton "Mesurer" puis 2 clics = cote reelle
+  - raccourcis : M mesurer, F ajuster, fleches = plan suivant/precedent
+
+L'echelle est detectee automatiquement selon la vue sous le trait
+(1:50, 1:100...). Si un plan n'a pas d'echelle connue, la visionneuse le
+signale : utilisez "Calibrer..." en tracant une mesure sur une cote connue
+du plan et en saisissant sa valeur reelle.
+
+POUR METTRE A JOUR (vous)
+-------------------------
+Relancer "Visionneuse web" dans Revit sur le meme dossier, en ne cochant QUE
+les feuilles que vous avez modifiees. Les autres plans restent en ligne : rien
+a reexporter inutilement. L'adresse ne change pas.
+Les feuilles deja publiees sont signalees "deja en ligne" dans la liste. Les mesures deja tracees par votre
+collaborateur restent enregistrees dans son navigateur.
+
+LE PLUS SIMPLE : ENVOYER LE DOSSIER
+-----------------------------------
+Compressez ce dossier en .zip et envoyez-le. Votre collaborateur le
+decompresse et double-clique index.html : tout marche, sans internet.
+C'est suffisant si vous n'avez pas besoin d'un lien permanent.
+(A faire SANS la protection par mot de passe : le chiffrement du
+navigateur ne fonctionne pas sur un fichier ouvert en double-clic.)
+
+PUBLIER UN LIEN FIXE (gratuit, une seule vraie fois)
+----------------------------------------------------
+GitHub Pages heberge ce dossier a une adresse qui ne changera plus.
+
+   >>> Double-cliquez  publier.bat  <<<
+
+C'est tout. Le script s'occupe de tout le reste : il installe l'outil
+GitHub s'il manque, vous connecte (votre navigateur s'ouvre une fois),
+cree le depot, envoie les plans, allume la page web, puis affiche
+l'adresse et la copie dans le presse-papier.
+
+La toute premiere fois, il demande votre nom et votre e-mail (ils servent
+a dater les versions), et ouvre votre navigateur pour vous connecter a
+GitHub. Une seule fois.
+
+LA PAGE EST PUBLIQUE - MAIS LES PLANS PEUVENT ETRE CHIFFRES
+  Une page GitHub Pages est publique sur internet, et payer n'y change
+  rien (le controle d'acces n'existe qu'en offre Enterprise Cloud).
+  Une fois publie : le depot apparait sur votre profil GitHub, la page
+  peut etre trouvee par Google, n'importe qui peut copier le dossier, et
+  une copie faite ne se rattrape jamais.
+
+  D'ou l'option "Proteger les plans par un mot de passe" dans l'outil :
+  les plans sont alors CHIFFRES avant d'etre envoyes. GitHub n'heberge
+  que des blocs illisibles ; le dechiffrement se fait dans le navigateur
+  de votre collaborateur, avec le mot de passe. Les numeros et noms de
+  feuilles sont chiffres eux aussi, et les fichiers portent des noms
+  neutres : la liste des plans ne se devine pas.
+
+  Ce qu'il faut savoir :
+    - Communiquez le mot de passe une seule fois (par un AUTRE canal que
+      le lien). Le navigateur du collaborateur le retient ensuite.
+    - NOTEZ-LE : il est impossible de le retrouver depuis les plans
+      publies. Perdu, il faut tout republier avec "Repartir de zero".
+    - Choisissez-le solide. Les fichiers chiffres etant publics, on peut
+      les telecharger et essayer des mots de passe sans limite : une
+      phrase de plusieurs mots vaut bien mieux que "serene2027".
+    - Changer de mot de passe = republier tout le dossier.
+    - Un dossier chiffre s'ouvre par le LIEN https, pas par un
+      double-clic sur index.html : le chiffrement du navigateur n'est
+      pas disponible sur un simple fichier local.
+
+  Sans cette option, les plans sont lisibles par tous. Le fait qu'ils
+  portent une mention de propriete ne les protege pas techniquement :
+  elle preserve vos droits, elle n'empeche aucune copie, et elle ne vous
+  autorise pas a diffuser un projet dont le maitre d'ouvrage est
+  proprietaire. Verifiez votre contrat.
+
+MISE A JOUR (ensuite, a chaque fois)
+------------------------------------
+  1. Dans Revit, relancez Visionneuse web sur CE MEME dossier.
+     Ne cochez que les feuilles que vous avez modifiees : les autres
+     restent en ligne.
+  2. Double-cliquez publier.bat.
+L'adresse ne change jamais. Votre collaborateur n'a rien a faire :
+il rafraichit la page.
