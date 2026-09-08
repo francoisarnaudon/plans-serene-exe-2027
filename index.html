@@ -255,7 +255,8 @@ select{
         <div class="grp">
           <button data-outil="choisir" title="Choisir, déplacer, tourner">&#9995;</button>
           <span class="sep"></span>
-          <button data-outil="fleche" title="Flèche">&#8599;</button>
+          <button data-outil="trait" title="Trait (Maj : droit)">&#8212;</button>
+          <button data-outil="fleche" title="Flèche (Maj : droite)">&#8599;</button>
           <button data-outil="rect" title="Rectangle">&#9633;</button>
           <button data-outil="ellipse" title="Rond / ellipse">&#9711;</button>
           <button data-outil="texte" title="Texte">T</button>
@@ -283,8 +284,8 @@ select{
           <button data-taille="2" title="Grand" style="font-size:18px">A</button>
           <span id="aRot" hidden>
             <span class="sep"></span>
-            <button id="aRotG" title="Tourner à gauche">&#8630;</button>
-            <button id="aRotD" title="Tourner à droite">&#8631;</button>
+            <button id="aRotG" title="Tourner à gauche (15°)">&#8630;</button>
+            <button id="aRotD" title="Tourner à droite (15°)">&#8631;</button>
           </span>
         </div>
         <div class="grp">
@@ -1215,6 +1216,30 @@ function coinsTexte(a){
   });
 }
 
+function centreDe(a){
+  if(a.type === "texte" || a.type === "bulle") return a.p;
+  return {x: (a.a.x + a.b.x)/2, y: (a.a.y + a.b.y)/2};
+}
+
+// ramene un point dans le repere propre de l'objet (rotation annulee)
+function versLocal(q, c, ang){
+  if(!ang) return q;
+  var dx = q.x - c.x, dy = q.y - c.y, co = Math.cos(-ang), si = Math.sin(-ang);
+  return {x: c.x + dx*co - dy*si, y: c.y + dx*si + dy*co};
+}
+
+function tournerAutour(p, c, ang){
+  var dx = p.x - c.x, dy = p.y - c.y, co = Math.cos(ang), si = Math.sin(ang);
+  return {x: c.x + dx*co - dy*si, y: c.y + dx*si + dy*co};
+}
+
+// angle courant : porte par l'objet, ou par la direction du trait
+function angleDe(a){
+  if(a.type === "trait" || a.type === "fleche")
+    return Math.atan2(a.b.y - a.a.y, a.b.x - a.a.x);
+  return a.angle || 0;
+}
+
 function dansPolygone(q, pts){
   var d = false;
   for(var i=0, j=pts.length-1; i<pts.length; j=i++){
@@ -1234,22 +1259,24 @@ function annotSous(q){
   var liste = annotsDuPlan(), tol = 8 / zoom;
   for(var i = liste.length - 1; i >= 0; i--){
     var a = liste[i], t = Math.max(tol, (a.ep || 1) * 1.5);
-    if(a.type === "fleche"){
+    if(a.type === "fleche" || a.type === "trait"){
       if(prochePoint(q, a.a, a.b, t)) return i;
     }else if(a.type === "rect"){
+      var ql = versLocal(q, centreDe(a), a.angle || 0);
       var x0=Math.min(a.a.x,a.b.x), x1=Math.max(a.a.x,a.b.x);
       var y0=Math.min(a.a.y,a.b.y), y1=Math.max(a.a.y,a.b.y);
       if(a.plein){
-        if(q.x>=x0-t && q.x<=x1+t && q.y>=y0-t && q.y<=y1+t) return i;
+        if(ql.x>=x0-t && ql.x<=x1+t && ql.y>=y0-t && ql.y<=y1+t) return i;
       }else{
         var c=[{x:x0,y:y0},{x:x1,y:y0},{x:x1,y:y1},{x:x0,y:y1}];
-        for(var k=0;k<4;k++) if(prochePoint(q,c[k],c[(k+1)%4],t)) return i;
+        for(var k=0;k<4;k++) if(prochePoint(ql,c[k],c[(k+1)%4],t)) return i;
       }
     }else if(a.type === "ellipse"){
+      var qe = versLocal(q, centreDe(a), a.angle || 0);
       var rx=Math.abs(a.b.x-a.a.x)/2, ry=Math.abs(a.b.y-a.a.y)/2;
       var cx=(a.a.x+a.b.x)/2, cy=(a.a.y+a.b.y)/2;
       if(rx<1e-6||ry<1e-6) continue;
-      var d = Math.sqrt(Math.pow((q.x-cx)/rx,2) + Math.pow((q.y-cy)/ry,2));
+      var d = Math.sqrt(Math.pow((qe.x-cx)/rx,2) + Math.pow((qe.y-cy)/ry,2));
       if(a.plein ? d <= 1 + t/Math.max(rx,ry)
                  : Math.abs(d - 1) <= t/Math.min(rx,ry)) return i;
     }else if(a.type === "texte" || a.type === "bulle"){
@@ -1262,11 +1289,19 @@ function annotSous(q){
 
 // poignee de rotation d'un texte : au-dessus de la boite, a 22 px ecran
 function poigneeDe(a){
-  if(!a || (a.type !== "texte" && a.type !== "bulle")) return null;
-  var b = boiteTexte(a), d = b.h + 22 / zoom;
-  var c = Math.cos(a.angle || 0), s = Math.sin(a.angle || 0);
-  var lx = b.l / 2, ly = -d;
-  return {x: a.p.x + lx*c - ly*s, y: a.p.y + lx*s + ly*c};
+  if(!a) return null;
+  if(a.type === "texte" || a.type === "bulle"){
+    var b = boiteTexte(a), d = b.h + 22 / zoom;
+    var c = Math.cos(a.angle || 0), s = Math.sin(a.angle || 0);
+    var lx = b.l / 2, ly = -d;
+    return {x: a.p.x + lx*c - ly*s, y: a.p.y + lx*s + ly*c};
+  }
+  // pour les formes : au-dessus du centre, perpendiculairement a l'objet
+  var ce = centreDe(a);
+  var r = (a.type === "trait" || a.type === "fleche")
+        ? Math.hypot(a.b.x-a.a.x, a.b.y-a.a.y) / 2
+        : Math.abs(a.b.y - a.a.y) / 2;
+  return tournerAutour({x: ce.x, y: ce.y - r - 22/zoom}, ce, angleDe(a));
 }
 
 // --------------------------------------------------------------- rendu
@@ -1287,17 +1322,20 @@ function traceAnnot(a, choisi){
   ctx.strokeStyle = a.couleur; ctx.fillStyle = a.couleur;
   ctx.lineWidth = ep; ctx.lineCap = "round"; ctx.lineJoin = "round";
 
-  if(a.type === "fleche"){
+  if(a.type === "trait"){
+    ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); ctx.stroke();
+  }else if(a.type === "fleche"){
     fleche(ctx, A, B, ep);
   }else if(a.type === "rect"){
-    var x=Math.min(A.x,B.x), y=Math.min(A.y,B.y);
-    var w=Math.abs(B.x-A.x), h=Math.abs(B.y-A.y);
-    if(a.plein){ ctx.globalAlpha=0.25; ctx.fillRect(x,y,w,h); ctx.globalAlpha=1; }
-    ctx.strokeRect(x,y,w,h);
-  }else if(a.type === "ellipse"){
     var cx=(A.x+B.x)/2, cy=(A.y+B.y)/2;
+    var w=Math.abs(B.x-A.x), h=Math.abs(B.y-A.y);
+    ctx.translate(cx, cy); ctx.rotate(a.angle || 0);
+    if(a.plein){ ctx.globalAlpha=0.25; ctx.fillRect(-w/2,-h/2,w,h); ctx.globalAlpha=1; }
+    ctx.strokeRect(-w/2,-h/2,w,h);
+  }else if(a.type === "ellipse"){
+    var ex=(A.x+B.x)/2, ey=(A.y+B.y)/2;
     var rx=Math.abs(B.x-A.x)/2, ry=Math.abs(B.y-A.y)/2;
-    ctx.beginPath(); ctx.ellipse(cx,cy,rx,ry,0,0,6.2832);
+    ctx.beginPath(); ctx.ellipse(ex,ey,rx,ry,a.angle || 0,0,6.2832);
     if(a.plein){ ctx.globalAlpha=0.25; ctx.fill(); ctx.globalAlpha=1; }
     ctx.stroke();
   }else if(a.type === "texte" || a.type === "bulle"){
@@ -1310,11 +1348,13 @@ function traceAnnot(a, choisi){
     ctx.font = t + "px 'Segoe UI',sans-serif";
     ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
     var l = ctx.measureText(a.txt || "").width, m = t*0.35;
-    ctx.globalAlpha = 0.85; ctx.fillStyle = "#ffffff";
-    ctx.fillRect(-m, -t*1.25, l + 2*m, t*1.25 + m);
-    ctx.globalAlpha = 1;
-    ctx.strokeStyle = a.couleur; ctx.lineWidth = Math.max(1, ep*0.6);
-    ctx.strokeRect(-m, -t*1.25, l + 2*m, t*1.25 + m);
+    if(a.type === "bulle"){          // seule la bulle porte un cadre
+      ctx.globalAlpha = 0.85; ctx.fillStyle = "#ffffff";
+      ctx.fillRect(-m, -t*1.25, l + 2*m, t*1.25 + m);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = a.couleur; ctx.lineWidth = Math.max(1, ep*0.6);
+      ctx.strokeRect(-m, -t*1.25, l + 2*m, t*1.25 + m);
+    }
     ctx.fillStyle = a.couleur;
     ctx.fillText(a.txt || "", 0, -t*0.28);
   }
@@ -1342,6 +1382,11 @@ function emprise(a){
   if(a.type === "texte" || a.type === "bulle"){
     pts = coinsTexte(a).map(versEcran);
     if(a.type === "bulle") pts.push(versEcran(a.a));
+  }else if(a.angle){
+    var ce = centreDe(a), co = [
+      {x:a.a.x, y:a.a.y}, {x:a.b.x, y:a.a.y},
+      {x:a.b.x, y:a.b.y}, {x:a.a.x, y:a.b.y}];
+    pts = co.map(function(p){ return versEcran(tournerAutour(p, ce, a.angle)); });
   }else{
     pts = [versEcran(a.a), versEcran(a.b)];
   }
@@ -1395,9 +1440,20 @@ function supprimerAnnot(){
 
 function tourner(deg){
   var a = annotsDuPlan()[selAnn];
-  if(!a || (a.type !== "texte" && a.type !== "bulle")) return;
-  a.angle = ((a.angle || 0) + deg * Math.PI / 180);
+  if(!a) return;
+  poserAngle(a, angleDe(a) + deg * Math.PI / 180);
   sauver(); dessiner();
+}
+
+// une seule porte d'entree, quel que soit le type d'objet
+function poserAngle(a, cible){
+  if(a.type === "trait" || a.type === "fleche"){
+    var ce = centreDe(a), delta = cible - angleDe(a);
+    a.a = tournerAutour(a.a, ce, delta);
+    a.b = tournerAutour(a.b, ce, delta);
+  }else{
+    a.angle = cible;
+  }
 }
 
 // deplace tous les points d'un objet
@@ -1422,12 +1478,31 @@ function annotDown(q, e){
   return true;
 }
 
-function annotMove(q){
+// Maj : trait a 0/45/90 degres, rectangle carre, ellipse ronde
+function contraindre(a, q){
+  var dx = q.x - a.a.x, dy = q.y - a.a.y;
+  if(a.type === "trait" || a.type === "fleche"){
+    var an = Math.round(Math.atan2(dy, dx) / (Math.PI/4)) * (Math.PI/4);
+    var L = Math.hypot(dx, dy);
+    return {x: a.a.x + L*Math.cos(an), y: a.a.y + L*Math.sin(an)};
+  }
+  var c = Math.max(Math.abs(dx), Math.abs(dy));
+  return {x: a.a.x + (dx < 0 ? -c : c), y: a.a.y + (dy < 0 ? -c : c)};
+}
+
+function annotMove(q, maj){
   if(tourneAnn){
     var a = annotsDuPlan()[selAnn];
     if(a){
-      var b = boiteTexte(a);
-      a.angle = Math.atan2(q.y - a.p.y, q.x - a.p.x) - Math.atan2(-(b.h + 22/zoom), b.l/2);
+      if(a.type === "texte" || a.type === "bulle"){
+        var b = boiteTexte(a);
+        a.angle = Math.atan2(q.y - a.p.y, q.x - a.p.x)
+                - Math.atan2(-(b.h + 22/zoom), b.l/2);
+      }else{
+        // la poignee est a 90 deg au-dessus du centre : on retranche ce quart
+        var ce = centreDe(a);
+        poserAngle(a, Math.atan2(q.y - ce.y, q.x - ce.x) + Math.PI/2);
+      }
       dessiner();
     }
     return true;
@@ -1439,7 +1514,7 @@ function annotMove(q){
   }
   if(brouillon){
     if(brouillon.type === "bulle") brouillon.p = q;
-    else if(brouillon.b) brouillon.b = q;
+    else if(brouillon.b) brouillon.b = maj ? contraindre(brouillon, q) : q;
     dessiner();
     return true;
   }
@@ -1487,9 +1562,7 @@ function majPanneau(){
     b.classList.toggle("on", +b.getAttribute("data-taille") === tailleA);
   });
   $("aPlein").classList.toggle("on", pleinA);
-  var a = annotsDuPlan()[selAnn];
-  var estTexte = !!(a && (a.type === "texte" || a.type === "bulle"));
-  $("aRot").hidden = !estTexte;
+  $("aRot").hidden = selAnn < 0;
   $("aSuppr").disabled = selAnn < 0;
   $("bAnn").classList.toggle("on", !!outil);
 }
@@ -1527,59 +1600,110 @@ function texteSur(txt){
   return out;
 }
 
-function graverAnnots(doc, liste){
+// Matrice viewport (repere de la visionneuse) -> espace utilisateur du PDF.
+// C'est pdf.js qui la fournit : elle tient compte de /Rotate ET de la CropBox,
+// que rien ne permet de deviner autrement.
+function matriceDeLaPage(octets){
+  return pdfjsLib.getDocument({data: octets.slice(), worker: worker()}).promise
+    .then(function(pdf){
+      return pdf.getPage(1).then(function(pg){
+        var m = pdfjsLib.Util.inverseTransform(pg.getViewport({scale:1}).transform);
+        try{ pdf.destroy(); }catch(e){}
+        return m;
+      });
+    });
+}
+
+function graverAnnots(doc, liste, mat){
   return doc.embedFont(PDFLib.StandardFonts.Helvetica).then(function(police){
-    var page = doc.getPage(0), H = page.getHeight();
-    function Y(v){ return H - v; }
+    var page = doc.getPage(0), U = pdfjsLib.Util;
+
+    // un point de la visionneuse -> le meme point dans le PDF
+    function P(p){
+      var t = U.applyTransform([p.x, p.y], mat);
+      return {x:t[0], y:t[1]};
+    }
+    // repere propre du texte (Y vers le BAS, comme a l'ecran) -> PDF
+    function loc(pu, cu, su, lx, ly){
+      return {x: pu.x + lx*cu + ly*su, y: pu.y + lx*su - ly*cu};
+    }
+
+    // --- 1. les FORMES, sous la matrice : on garde les coordonnees d'ecran
+    page.pushOperators(
+      PDFLib.pushGraphicsState(),
+      PDFLib.concatTransformationMatrix(mat[0],mat[1],mat[2],mat[3],mat[4],mat[5]));
 
     function trait(a, b, coul, ep){
-      page.drawLine({start:{x:a.x, y:Y(a.y)}, end:{x:b.x, y:Y(b.y)},
+      page.drawLine({start:{x:a.x,y:a.y}, end:{x:b.x,y:b.y},
                      thickness:ep, color:coul});
     }
     function flechePdf(a, b, coul, ep){
       trait(a, b, coul, ep);
-      var an = Math.atan2(b.y-a.y, b.x-a.x), L = Math.max(9*ep/1.5, ep*3.5), o = 0.42;
+      var an = Math.atan2(b.y-a.y, b.x-a.x), L = Math.max(6, ep*3.5), o = 0.42;
       trait({x:b.x - L*Math.cos(an-o), y:b.y - L*Math.sin(an-o)}, b, coul, ep);
       trait({x:b.x - L*Math.cos(an+o), y:b.y - L*Math.sin(an+o)}, b, coul, ep);
     }
 
     liste.forEach(function(a){
       var coul = couleurPdf(a.couleur), ep = Math.max(0.3, a.ep || 1);
-      if(a.type === "fleche"){
+      if(a.type === "trait"){
+        trait(a.a, a.b, coul, ep);
+      }else if(a.type === "fleche"){
         flechePdf(a.a, a.b, coul, ep);
-      }else if(a.type === "rect"){
-        var x=Math.min(a.a.x,a.b.x), y1=Math.max(a.a.y,a.b.y);
-        var w=Math.abs(a.b.x-a.a.x), h=Math.abs(a.b.y-a.a.y);
-        page.drawRectangle({x:x, y:Y(y1), width:w, height:h,
-          borderColor:coul, borderWidth:ep,
-          color: a.plein ? coul : undefined, opacity: a.plein ? 0.25 : undefined});
-      }else if(a.type === "ellipse"){
+      }else if(a.type === "bulle"){
+        flechePdf(a.p, a.a, coul, ep);          // le trait de rappel
+      }else if(a.type === "rect" || a.type === "ellipse"){
+        // on translate au centre et on tourne, exactement comme a l'ecran :
+        // plus simple et plus sur que de deviner ou pdf-lib place son origine
         var cx=(a.a.x+a.b.x)/2, cy=(a.a.y+a.b.y)/2;
-        page.drawEllipse({x:cx, y:Y(cy),
-          xScale:Math.abs(a.b.x-a.a.x)/2, yScale:Math.abs(a.b.y-a.a.y)/2,
-          borderColor:coul, borderWidth:ep,
-          color: a.plein ? coul : undefined, opacity: a.plein ? 0.25 : undefined});
-      }else if(a.type === "texte" || a.type === "bulle"){
-        var t = a.taille, txt = texteSur(a.txt || "");
-        var l = police.widthOfTextAtSize(txt, t), m = t*0.35;
-        var ang = -(a.angle || 0) * 180 / Math.PI;
-        if(a.type === "bulle") flechePdf(a.p, a.a, coul, ep);
-        // le fond blanc suit la meme rotation que le texte
-        var c = Math.cos(a.angle||0), s = Math.sin(a.angle||0);
-        var ox = -m, oy = m;           // coin bas-gauche de la boite, repere texte
-        page.drawRectangle({
-          x: a.p.x + ox*c - oy*s, y: Y(a.p.y + ox*s + oy*c),
-          width: l + 2*m, height: t*1.25 + m,
-          rotate: PDFLib.degrees(ang),
-          color: PDFLib.rgb(1,1,1), opacity: 0.85,
-          borderColor: coul, borderWidth: Math.max(0.3, ep*0.6)});
-        var bx = -0, by = -t*0.28;
-        page.drawText(txt, {
-          x: a.p.x + bx*c - by*s, y: Y(a.p.y + bx*s + by*c),
-          size: t, font: police, color: coul,
-          rotate: PDFLib.degrees(ang)});
+        var w=Math.abs(a.b.x-a.a.x), h=Math.abs(a.b.y-a.a.y);
+        var an=a.angle||0, co=Math.cos(an), si=Math.sin(an);
+        page.pushOperators(PDFLib.pushGraphicsState(),
+          PDFLib.concatTransformationMatrix(co, si, -si, co, cx, cy));
+        var opt = {borderColor:coul, borderWidth:ep,
+                   color: a.plein ? coul : undefined,
+                   opacity: a.plein ? 0.25 : undefined};
+        if(a.type === "rect"){
+          opt.x = -w/2; opt.y = -h/2; opt.width = w; opt.height = h;
+          page.drawRectangle(opt);
+        }else{
+          opt.x = 0; opt.y = 0; opt.xScale = w/2; opt.yScale = h/2;
+          page.drawEllipse(opt);
+        }
+        page.pushOperators(PDFLib.popGraphicsState());
       }
     });
+
+    page.pushOperators(PDFLib.popGraphicsState());
+
+    // --- 2. les TEXTES, hors matrice : elle les retournerait
+    liste.forEach(function(a){
+      if(a.type !== "texte" && a.type !== "bulle") return;
+      var coul = couleurPdf(a.couleur), ep = Math.max(0.3, a.ep || 1);
+      var txt = texteSur(a.txt || ""), an = a.angle || 0;
+      var pu = P(a.p);
+      // l'angle et l'echelle se lisent sur un vecteur unitaire transforme
+      var dir = P({x: a.p.x + Math.cos(an), y: a.p.y + Math.sin(an)});
+      var vx = dir.x - pu.x, vy = dir.y - pu.y;
+      var k = Math.hypot(vx, vy) || 1;
+      var cu = vx/k, su = vy/k;
+      var angDeg = Math.atan2(vy, vx) * 180 / Math.PI;
+      var t = a.taille * k;
+      var l = police.widthOfTextAtSize(txt, t), m = t*0.35;
+
+      if(a.type === "bulle"){
+        var co = loc(pu, cu, su, -m, m);       // coin bas-gauche du cadre
+        page.drawRectangle({
+          x: co.x, y: co.y, width: l + 2*m, height: t*1.25 + m,
+          rotate: PDFLib.degrees(angDeg),
+          color: PDFLib.rgb(1,1,1), opacity: 0.85,
+          borderColor: coul, borderWidth: Math.max(0.3, ep*0.6)});
+      }
+      var ba = loc(pu, cu, su, 0, -t*0.28);    // ligne de base du texte
+      page.drawText(txt, {x: ba.x, y: ba.y, size: t, font: police,
+                          color: coul, rotate: PDFLib.degrees(angDeg)});
+    });
+
     return doc.save();
   });
 }
@@ -1590,8 +1714,12 @@ function octetsAnnotes(p){
     var liste = annots[p.id] || [];
     if(!liste.length || !$("expoAnn").checked) return u;
     return chargerFusion()
-      .then(function(){ return PDFLib.PDFDocument.load(u); })
-      .then(function(doc){ return graverAnnots(doc, liste); });
+      .then(function(){ return matriceDeLaPage(u); })
+      .then(function(mat){
+        return PDFLib.PDFDocument.load(u).then(function(doc){
+          return graverAnnots(doc, liste, mat);
+        });
+      });
   });
 }
 
@@ -1745,7 +1873,7 @@ cv.addEventListener("pointerdown",function(e){
 });
 cv.addEventListener("pointermove",function(e){
   if(!page) return;
-  if(outil && annotMove(versMonde(e.offsetX,e.offsetY))) return;
+  if(outil && annotMove(versMonde(e.offsetX,e.offsetY), e.shiftKey)) return;
   if(glisse&&dep){
     var dx=e.offsetX-dep.x, dy=e.offsetY-dep.y;
     bouge=Math.max(bouge,Math.abs(dx)+Math.abs(dy));
@@ -1764,7 +1892,11 @@ cv.addEventListener("pointerup",function(e){
   if(!page) return;
   var clic=bouge<=4;
   glisse=false; dep=null; majCurseur();
-  if(outil){ annotUp(versMonde(e.offsetX,e.offsetY), clic); majPanneau(); return; }
+  if(outil){
+    var qq = versMonde(e.offsetX,e.offsetY);
+    if(e.shiftKey && brouillon && brouillon.b) qq = contraindre(brouillon, qq);
+    annotUp(qq, clic); majPanneau(); return;
+  }
   if(!clic||!mesurer) return;
   var q=versMonde(e.offsetX,e.offsetY);
   var a=accrocherPoint(q, pts[0]);
@@ -1824,7 +1956,7 @@ $("bSnap").onclick=function(){
   dessiner();
   indice(accrochage?"Accrochage activé":"Accrochage désactivé",2000);
 };
-$("bAnn").onclick=function(){ choisirOutil(outil ? null : "fleche"); };
+$("bAnn").onclick=function(){ choisirOutil(outil ? null : "trait"); };
 [].forEach.call(document.querySelectorAll("#annot [data-outil]"), function(b){
   b.onclick=function(){ choisirOutil(b.getAttribute("data-outil")); };
 });
