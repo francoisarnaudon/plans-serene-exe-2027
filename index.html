@@ -85,6 +85,37 @@ select{
   opacity:0;transition:opacity .18s;max-width:82%;text-align:center;
 }
 #hint.show{opacity:1}
+#expo{
+  position:fixed;inset:0;z-index:55;display:none;align-items:center;
+  justify-content:center;background:rgba(10,12,15,.72);padding:20px;
+}
+#expo.on{display:flex}
+#expo .bloc{
+  width:100%;max-width:460px;max-height:82vh;display:flex;flex-direction:column;
+  background:var(--bg2);border:1px solid var(--bd);border-radius:12px;padding:20px;
+}
+#expo h3{margin:0 0 4px;font-size:15px}
+#expo .aide{color:var(--fg2);font-size:12px;margin:0 0 12px}
+#expo .liste{
+  flex:1;min-height:80px;overflow:auto;border:1px solid var(--bd);
+  border-radius:8px;background:#20262e;padding:6px;
+}
+#expo label{
+  display:flex;gap:8px;align-items:center;padding:5px 6px;border-radius:5px;
+  font-size:12.5px;cursor:pointer;
+}
+#expo label:hover{background:#2b323b}
+#expo label span{color:var(--fg2)}
+#expo .rangee{display:flex;gap:8px;margin-top:12px}
+#expo button{
+  flex:1;padding:9px;border-radius:8px;border:1px solid var(--bd);
+  background:#272d36;color:var(--fg);font:inherit;font-size:13px;
+}
+#expo button.p{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}
+#expo button:disabled{opacity:.5}
+#expo .petit{display:flex;gap:6px;margin:8px 0 0}
+#expo .petit button{flex:0 0 auto;padding:4px 10px;font-size:12px}
+#expo .etat{color:var(--fg2);font-size:12px;margin-top:10px;min-height:16px}
 #coffre{
   position:fixed;inset:0;z-index:60;display:none;align-items:center;
   justify-content:center;background:#14171b;padding:24px;
@@ -183,6 +214,8 @@ select{
       <button id="bMes" title="Mesurer : cliquez 2 points (M)">Mesurer</button>
       <button id="bSnap" class="on" title="Accrochage : extrémité, milieu, intersection, sur le trait, parallèle (A)">Accrochage</button>
       <button id="bClr" title="Effacer les mesures de ce plan">Effacer</button>
+      <span class="sep"></span>
+      <button id="bPdf" title="Enregistrer des plans en PDF (P)">PDF</button>
       <span class="sp"></span>
       <select id="selEch" title="Échelle utilisée pour convertir les mesures"></select>
       <select id="selUnit" title="Unité d'affichage">
@@ -211,6 +244,23 @@ select{
   <p id="mTexte"></p>
   <input id="mInput" type="text" inputmode="decimal" autocomplete="off">
   <div class="row"><button id="mNon">Annuler</button><button id="mOui" class="p">Valider</button></div>
+</div></div>
+
+<div id="expo"><div class="bloc">
+  <h3>Enregistrer en PDF</h3>
+  <p class="aide">Choisissez les plans à enregistrer. Ce sont les PDF d'origine,
+     à l'échelle, imprimables tels quels.</p>
+  <div class="liste" id="expoListe"></div>
+  <div class="petit">
+    <button id="expoTout">Tout</button>
+    <button id="expoRien">Rien</button>
+  </div>
+  <div class="etat" id="expoEtat"></div>
+  <div class="rangee">
+    <button id="expoNon">Annuler</button>
+    <button id="expoSep">Fichiers séparés</button>
+    <button id="expoUn" class="p">Un seul PDF</button>
+  </div>
 </div></div>
 
 <div id="coffre"><div class="bloc">
@@ -1046,6 +1096,138 @@ function marqueAccroche(ctx, a){
   ctx.restore();
 }
 
+// ------------------------------------------------------- enregistrer en PDF
+// Les plans SONT des PDF : les enregistrer ne demande aucune reconstruction.
+// Seul le regroupement en un fichier unique exige une fusion, d'ou pdf-lib,
+// charge seulement quand on la demande (513 Ko qu'on ne fait pas payer aux
+// autres visites).
+function nomFichier(txt){
+  return String(txt).replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, " ").trim();
+}
+
+function telecharger(octets, nom){
+  var url = URL.createObjectURL(new Blob([octets], {type:"application/pdf"}));
+  var a = document.createElement("a");
+  a.href = url; a.download = nom;
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); }, 2000);
+}
+
+// octets DECHIFFRES d'un plan, qu'il soit deja ouvert ou non
+function octetsDuPlan(p){
+  return new Promise(function(ok, ko){
+    chargerOctets(p, ok, function(m){ ko(new Error(m)); });
+  });
+}
+
+function chargerFusion(){
+  if(window.PDFLib) return Promise.resolve();
+  return new Promise(function(ok, ko){
+    var sc = document.createElement("script");
+    sc.src = "pdfjs/pdf-lib.min.js" + (window.FRAIS || "");
+    sc.onload = function(){ window.PDFLib ? ok() : ko(new Error("pdf-lib")); };
+    sc.onerror = function(){ ko(new Error("pdf-lib introuvable")); };
+    document.head.appendChild(sc);
+  });
+}
+
+function plansCoches(){
+  return [].slice.call(document.querySelectorAll("#expoListe input:checked"))
+           .map(function(c){
+             return PLANS.filter(function(p){ return p.id === c.value; })[0];
+           }).filter(Boolean);
+}
+
+function etatExpo(txt){ $("expoEtat").textContent = txt || ""; }
+
+function boutonsExpo(actifs){
+  ["expoUn","expoSep","expoTout","expoRien"].forEach(function(id){
+    $(id).disabled = !actifs;
+  });
+}
+
+function ouvrirExpo(){
+  var l = $("expoListe");
+  l.innerHTML = "";
+  PLANS.forEach(function(p){
+    var lab = document.createElement("label");
+    var c = document.createElement("input");
+    c.type = "checkbox"; c.value = p.id;
+    c.checked = !!(plan && p.id === plan.id);
+    lab.appendChild(c);
+    lab.appendChild(document.createTextNode(p.num + " "));
+    var sp = document.createElement("span");
+    sp.textContent = p.nom || "";
+    lab.appendChild(sp);
+    l.appendChild(lab);
+  });
+  etatExpo("");
+  boutonsExpo(true);
+  $("expo").classList.add("on");
+}
+
+// enregistrement separe : un fichier par plan, nomme lisiblement
+function expoSepares(){
+  var choisis = plansCoches();
+  if(!choisis.length) return etatExpo("Cochez au moins un plan.");
+  boutonsExpo(false);
+  var i = 0;
+  (function suivant(){
+    if(i >= choisis.length){
+      etatExpo(choisis.length + " fichier(s) enregistré(s).");
+      boutonsExpo(true);
+      return;
+    }
+    var p = choisis[i++];
+    etatExpo("Préparation " + i + "/" + choisis.length + " : " + p.num + "…");
+    octetsDuPlan(p).then(function(u){
+      telecharger(u, nomFichier(p.num + " - " + (p.nom || "plan")) + ".pdf");
+      setTimeout(suivant, 350);      // laisse le navigateur souffler
+    })["catch"](function(e){
+      etatExpo("Échec sur " + p.num + " : " + e.message);
+      boutonsExpo(true);
+    });
+  })();
+}
+
+// un seul fichier : fusion des pages dans l'ordre de la liste
+function expoUnSeul(){
+  var choisis = plansCoches();
+  if(!choisis.length) return etatExpo("Cochez au moins un plan.");
+  if(choisis.length === 1) return expoSepares();
+  boutonsExpo(false);
+  etatExpo("Préparation de l'outil de fusion…");
+  chargerFusion().then(function(){
+    return PDFLib.PDFDocument.create();
+  }).then(function(sortie){
+    var i = 0;
+    function suivant(){
+      if(i >= choisis.length) return sortie.save();
+      var p = choisis[i++];
+      etatExpo("Ajout " + i + "/" + choisis.length + " : " + p.num + "…");
+      return octetsDuPlan(p)
+        .then(function(u){ return PDFLib.PDFDocument.load(u); })
+        .then(function(src){
+          return sortie.copyPages(src, src.getPageIndices());
+        })
+        .then(function(pages){
+          pages.forEach(function(pg){ sortie.addPage(pg); });
+          return suivant();
+        });
+    }
+    return suivant();
+  }).then(function(octets){
+    telecharger(octets, nomFichier((D.projet || "plans") + " - " +
+                                   choisis.length + " plans") + ".pdf");
+    etatExpo("Enregistré : " + choisis.length + " plans en un fichier.");
+    boutonsExpo(true);
+  })["catch"](function(e){
+    etatExpo("Fusion impossible (" + e.message +
+             "). Essayez « Fichiers séparés ».");
+    boutonsExpo(true);
+  });
+}
+
 // ---------------------------------------------------------------- souris
 var glisse=false, dep=null, bouge=0;
 cv.addEventListener("pointerdown",function(e){
@@ -1116,6 +1298,19 @@ $("bSnap").onclick=function(){
   dessiner();
   indice(accrochage?"Accrochage activé":"Accrochage désactivé",2000);
 };
+$("bPdf").onclick=ouvrirExpo;
+$("expoNon").onclick=function(){ $("expo").classList.remove("on"); };
+$("expoTout").onclick=function(){
+  [].forEach.call(document.querySelectorAll("#expoListe input"),
+                  function(c){ c.checked=true; });
+};
+$("expoRien").onclick=function(){
+  [].forEach.call(document.querySelectorAll("#expoListe input"),
+                  function(c){ c.checked=false; });
+};
+$("expoSep").onclick=expoSepares;
+$("expoUn").onclick=expoUnSeul;
+
 $("bClr").onclick=function(){
   if(!plan) return;
   delete mesures[plan.id]; pts=[]; survol=null; sauver(); dessiner();
@@ -1135,9 +1330,14 @@ document.addEventListener("keydown",function(e){
     return;
   }
   if($("modal").classList.contains("show")) return;
+  if($("expo").classList.contains("on")){
+    if(e.key==="Escape") $("expo").classList.remove("on");
+    return;
+  }
   var k=e.key.toLowerCase();
   if(k==="m") $("bMes").click();
   else if(k==="a") $("bSnap").click();
+  else if(k==="p"){ e.preventDefault(); ouvrirExpo(); }
   else if(k==="f") cadrer();
   else if(k==="escape"){ pts=[]; survol=null; indice("",0); dessiner(); }
   else if(e.key==="ArrowDown"||e.key==="ArrowRight"){ e.preventDefault(); decale(1); }
