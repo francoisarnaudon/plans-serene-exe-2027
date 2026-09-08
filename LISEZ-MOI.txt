@@ -36,6 +36,42 @@ C'est suffisant si vous n'avez pas besoin d'un lien permanent.
 (A faire SANS la protection par mot de passe : le chiffrement du
 navigateur ne fonctionne pas sur un fichier ouvert en double-clic.)
 
+ANNOTER UN PLAN
+---------------
+Bouton "Annoter" (ou touche N). Un petit panneau s'ouvre :
+
+  fleche, rectangle, rond, texte, et "bulle" (un texte relie a un
+  point par une fleche). Couleur, epaisseur du trait, rempli ou vide,
+  et trois tailles de texte.
+
+  Main : choisir un objet pour le deplacer, le tourner (poignee bleue
+  au-dessus, ou les deux boutons flechés) ou le supprimer (touche
+  Suppr). Double-clic sur un texte pour le corriger.
+
+Ce sont de simples COMMENTAIRES, comme dans Acrobat : rien ne remonte
+vers la maquette Revit.
+
+Les annotations restent dans le navigateur de celui qui les pose (elles
+sont retrouvees a la prochaine visite, sur le meme ordinateur). Pour les
+transmettre, enregistrez le PDF : elles y sont gravees, donc imprimables
+et lisibles par n'importe qui.
+
+
+RECUPERER DES PLANS EN PDF
+--------------------------
+Dans la visionneuse, bouton PDF (ou touche P) : cochez les plans
+voulus, puis
+
+  - "Un seul PDF"        : tout dans un fichier, dans l'ordre de la liste
+  - "Fichiers separes"   : un fichier par plan, nomme "numero - nom.pdf"
+
+La case "avec les annotations" (cochee par defaut) grave les
+commentaires dans le PDF ; decochez-la pour un plan vierge.
+
+Ce sont les PDF d'origine, a l'echelle : imprimables tels quels, et
+mesurables dans n'importe quel lecteur. Rien n'est reconstruit.
+
+
 PUBLIER UN LIEN FIXE (gratuit, une seule vraie fois)
 ----------------------------------------------------
 GitHub Pages heberge ce dossier a une adresse qui ne changera plus.
