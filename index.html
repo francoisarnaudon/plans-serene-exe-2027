@@ -226,8 +226,14 @@ select{
 </div></div>
 
 <script src="pdfjs/pdf.min.js"></script>
-<script src="garde.js"></script>
-<script src="donnees.js"></script>
+<script>
+// GitHub Pages impose Cache-Control: max-age=600. Sans ce jeton, on rouvrirait
+// la page sur la liste de plans d'il y a dix minutes. Le jeton est fige pour
+// la session : le cache sert encore a l'interieur d'une visite.
+window.FRAIS = "?v=" + Date.now();
+document.write('<script src="garde.js' + window.FRAIS + '"><\/script>');
+document.write('<script src="donnees.js' + window.FRAIS + '"><\/script>');
+</script>
 <script>
 "use strict";
 (function(){
@@ -502,7 +508,8 @@ function chargerOctets(p, ok, ko){
   }
   if(PDF[p.id]) return livrer();
   var sc=document.createElement("script");
-  sc.src=p.fichier;
+  // meme raison : une feuille reexportee garde son nom de fichier
+  sc.src=p.fichier + (window.FRAIS || "");
   sc.onload=function(){
     sc.parentNode.removeChild(sc);
     PDF[p.id] ? livrer() : ko("Plan vide : "+p.fichier);
