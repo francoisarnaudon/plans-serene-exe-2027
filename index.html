@@ -352,8 +352,27 @@ select{
 // la page sur la liste de plans d'il y a dix minutes. Le jeton est fige pour
 // la session : le cache sert encore a l'interieur d'une visite.
 window.FRAIS = "?v=" + Date.now();
+document.write('<script src="version.js' + window.FRAIS + '"><\/script>');
 document.write('<script src="garde.js' + window.FRAIS + '"><\/script>');
 document.write('<script src="donnees.js' + window.FRAIS + '"><\/script>');
+</script>
+<script>
+// Cette page est-elle encore la bonne ? `index.html` echappe au jeton
+// ci-dessus (c'est LUI qu'on est en train de lire), et GitHub Pages le garde
+// 10 minutes. On compare donc le numero grave ici a celui du serveur, et on
+// se recharge sur une adresse que le cache ne connait pas.
+(function(){
+  var ici = "20260911143053";
+  if(ici.charAt(0) === "{") return;                  // dossier de developpement
+  var enLigne = (typeof VERSION !== "undefined") ? VERSION : null;
+  if(!enLigne || enLigne === ici) return;
+  try{
+    var u = new URL(location.href);
+    if(u.searchParams.get("v") === enLigne) return;  // deja tente : pas de boucle
+    u.searchParams.set("v", enLigne);
+    location.replace(u.toString());
+  }catch(e){}
+})();
 </script>
 <script>
 "use strict";
