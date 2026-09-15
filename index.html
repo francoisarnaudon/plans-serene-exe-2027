@@ -362,16 +362,47 @@ document.write('<script src="donnees.js' + window.FRAIS + '"><\/script>');
 // 10 minutes. On compare donc le numero grave ici a celui du serveur, et on
 // se recharge sur une adresse que le cache ne connait pas.
 (function(){
-  var ici = "20260915115837";
+  var ici = "20260915151142";
   if(ici.charAt(0) === "{") return;                  // dossier de developpement
   var enLigne = (typeof VERSION !== "undefined") ? VERSION : null;
-  if(!enLigne || enLigne === ici) return;
-  try{
-    var u = new URL(location.href);
-    if(u.searchParams.get("v") === enLigne) return;  // deja tente : pas de boucle
-    u.searchParams.set("v", enLigne);
-    location.replace(u.toString());
-  }catch(e){}
+
+  function recharger(v){
+    try{
+      var u = new URL(location.href);
+      if(u.searchParams.get("v") === v) return false; // deja tente : pas de boucle
+      u.searchParams.set("v", v);
+      location.replace(u.toString());
+      return true;
+    }catch(e){ return false; }
+  }
+  if(enLigne && enLigne !== ici && recharger(enLigne)) return;
+
+  // ONGLET RESTE OUVERT : sans ceci, une nouvelle publication ne se voyait
+  // qu'avec Ctrl+F5. On relit version.js (balise script + jeton : marche aussi
+  // en file://) toutes les minutes et a chaque retour sur l'onglet ; si le
+  // numero a change, la page se recharge d'elle-meme. Mesures, annotations et
+  // mot de passe memorise sont dans localStorage : rien n'est perdu.
+  var courant = enLigne || ici;
+  var enAttente = null;
+  function verifier(){
+    var s = document.createElement("script");
+    s.src = "version.js?v=" + Date.now();
+    s.onload = function(){
+      if(s.parentNode) s.parentNode.removeChild(s);
+      var v = (typeof VERSION !== "undefined") ? VERSION : null;
+      if(!v || v === courant) return;
+      if(document.visibilityState === "hidden"){ enAttente = v; return; }
+      recharger(v);
+    };
+    s.onerror = function(){ if(s.parentNode) s.parentNode.removeChild(s); };
+    document.head.appendChild(s);
+  }
+  setInterval(verifier, 60000);
+  document.addEventListener("visibilitychange", function(){
+    if(document.visibilityState !== "visible") return;
+    if(enAttente){ recharger(enAttente); return; }
+    verifier();
+  });
 })();
 </script>
 <script>
