@@ -109,6 +109,44 @@ select{
 }
 #annot .puce.on{border-color:#fff;box-shadow:0 0 0 2px var(--acc)}
 #annot .lib{color:var(--fg2);font-size:11px;margin-right:3px}
+/* Recherche de texte DANS les plans (Ctrl+F) : barre flottante en haut a
+   droite de la zone de dessin, comme la recherche d'un navigateur. */
+#rech{
+  position:absolute;right:12px;top:10px;z-index:25;display:none;
+  background:rgba(30,35,42,.97);border:1px solid var(--bd);border-radius:10px;
+  padding:8px;box-shadow:0 6px 24px rgba(0,0,0,.45);
+  width:min(330px,calc(100% - 24px));
+}
+#rech.on{display:block}
+#rech .ligne{display:flex;gap:5px;align-items:center}
+#rech input[type=search]{
+  flex:1;min-width:0;padding:6px 9px;border-radius:6px;border:1px solid var(--bd);
+  background:#171b20;color:var(--fg);font:inherit;font-size:13px;outline:none;
+}
+#rech input[type=search]:focus{border-color:var(--acc)}
+#rech button{
+  min-width:28px;height:28px;padding:0 7px;border-radius:6px;
+  border:1px solid var(--bd);background:#272d36;color:var(--fg);
+  font:inherit;font-size:13px;line-height:1;flex:0 0 auto;
+}
+#rech button:hover{background:#333b46}
+#rech button:disabled{opacity:.4;cursor:default}
+#rech .opt{display:flex;align-items:center;gap:6px;margin-top:7px;color:var(--fg2);font-size:12px}
+#rech .opt label{display:flex;align-items:center;gap:5px;cursor:pointer}
+#rech .nb{color:var(--fg2);font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums}
+#rech .res{max-height:min(46vh,320px);overflow-y:auto;margin-top:7px;display:none}
+#rech .res.on{display:block}
+#rech .res::-webkit-scrollbar{width:9px}
+#rech .res::-webkit-scrollbar-thumb{background:#3c444f;border-radius:5px;border:3px solid #1e232a}
+#rech .res button{
+  display:block;width:100%;height:auto;text-align:left;padding:6px 8px;margin-bottom:2px;
+  border:0;background:none;border-left:3px solid transparent;border-radius:6px;font-size:12px;
+}
+#rech .res button:hover{background:#2b323b}
+#rech .res button.on{background:#26364a;border-left-color:var(--acc)}
+#rech .res .pl{color:var(--fg2);font-size:11px}
+#rech .res .tx{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#rech .res mark{background:#8a6d1f;color:#fff;border-radius:2px;padding:0 1px}
 #expo{
   position:fixed;inset:0;z-index:55;display:none;align-items:center;
   justify-content:center;background:rgba(10,12,15,.72);padding:20px;
@@ -239,6 +277,7 @@ select{
       <button id="bSnap" class="on" title="Accrochage : extrémité, milieu, intersection, sur le trait, parallèle (A)">Accrochage</button>
       <button id="bClr" title="Effacer les mesures de ce plan">Effacer</button>
       <span class="sep"></span>
+      <button id="bRech" title="Rechercher un texte dans les plans (Ctrl+F)">Rechercher</button>
       <button id="bAnn" title="Annoter le plan : bulles, flèches, textes (N)">Annoter</button>
       <button id="bPdf" title="Enregistrer des plans en PDF (P)">PDF</button>
       <span class="sp"></span>
@@ -251,6 +290,19 @@ select{
     <div id="stage">
       <canvas id="cv"></canvas>
       <div id="hint"></div>
+      <div id="rech">
+        <div class="ligne">
+          <input id="rIn" type="search" placeholder="Rechercher un texte…" autocomplete="off">
+          <span class="nb" id="rNb">—</span>
+          <button id="rPrec" title="Résultat précédent (Maj+Entrée)">&#8249;</button>
+          <button id="rSuiv" title="Résultat suivant (Entrée)">&#8250;</button>
+          <button id="rFerm" title="Fermer (Échap)">&times;</button>
+        </div>
+        <div class="opt">
+          <label><input id="rTous" type="checkbox"> chercher dans tous les plans</label>
+        </div>
+        <div class="res" id="rRes"></div>
+      </div>
       <div id="annot">
         <div class="grp">
           <button data-outil="choisir" title="Choisir, déplacer, tourner">&#9995;</button>
@@ -293,7 +345,7 @@ select{
           <button id="aVider" title="Effacer toutes les annotations de ce plan">Tout effacer</button>
         </div>
       </div>
-      <div id="splash"><b>Choisissez un plan dans la liste</b><span>Molette = zoom · glisser = déplacer · M = mesurer</span></div>
+      <div id="splash"><b>Choisissez un plan dans la liste</b><span>Molette = zoom · glisser = déplacer · M = mesurer · Ctrl+F = rechercher un texte</span></div>
     </div>
 
     <div class="bar">
@@ -362,7 +414,7 @@ document.write('<script src="donnees.js' + window.FRAIS + '"><\/script>');
 // 10 minutes. On compare donc le numero grave ici a celui du serveur, et on
 // se recharge sur une adresse que le cache ne connait pas.
 (function(){
-  var ici = "20260918142243";
+  var ici = "20260918145944";
   if(ici.charAt(0) === "{") return;                  // dossier de developpement
   var enLigne = (typeof VERSION !== "undefined") ? VERSION : null;
 
@@ -698,6 +750,11 @@ function chargerOctets(p, ok, ko){
 function apresChargement(){
   majSelectEchelle();
   ajuster();
+  // le plan a ete ouvert pour montrer un resultat de recherche : on s'y rend
+  // maintenant que sa taille de page est connue (ajuster() vient de cadrer)
+  if(sautRes && plan && sautRes.p.id === plan.id){
+    var r = sautRes; sautRes = null; cadrerSur(r);
+  }
   // le plan vient d'arriver : si la mesure est deja active, c'est ICI que
   // l'index d'accrochage doit se construire (le bouton a pu etre clique
   // pendant le chargement, quand il n'y avait pas encore de page)
@@ -807,6 +864,7 @@ function dessiner(){
   }
 
   dessinerAnnots();
+  dessinerTrouves();
 
   var liste=(mesures[plan.id]||[]).slice();
   if(pts.length===1 && survol) liste.push({a:pts[0],b:survol,live:true});
@@ -2065,6 +2123,18 @@ function decale(d){
 $("burger").onclick=function(){ $("aside").classList.toggle("open"); };
 
 document.addEventListener("keydown",function(e){
+  // Ctrl+F : le reflexe de tout le monde pour chercher un texte. On prend la
+  // main sur la recherche du navigateur, qui ne verrait rien : le plan est
+  // dessine dans un canvas, pas ecrit dans la page.
+  if((e.ctrlKey||e.metaKey) && (e.key==="f"||e.key==="F")){
+    e.preventDefault(); ouvrirRech(); return;
+  }
+  if(e.key==="F3"){
+    e.preventDefault();
+    if(!$("rech").classList.contains("on")) ouvrirRech();
+    else allerRes(resI + (e.shiftKey ? -1 : 1));
+    return;
+  }
   if(/^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)){
     if(e.key==="Escape") e.target.blur();
     return;
@@ -2083,12 +2153,267 @@ document.addEventListener("keydown",function(e){
     e.preventDefault(); supprimerAnnot(); majPanneau();
   }
   else if(k==="f") cadrer();
-  else if(k==="escape"){ pts=[]; survol=null; indice("",0); dessiner(); }
+  else if(k==="escape"){
+    if($("rech").classList.contains("on")) fermerRech();
+    pts=[]; survol=null; indice("",0); dessiner();
+  }
   else if(e.key==="ArrowDown"||e.key==="ArrowRight"){ e.preventDefault(); decale(1); }
   else if(e.key==="ArrowUp"||e.key==="ArrowLeft"){ e.preventDefault(); decale(-1); }
   else if(k==="+"||k==="="){ zoomer(1.3); }
   else if(k==="-"){ zoomer(1/1.3); }
 });
+
+// ---------------------------------------------------------------- recherche
+// Ctrl+F : chercher un TEXTE DANS LES PLANS (reperes de poteaux, noms de
+// coupes, nomenclatures, annotations...), et pas seulement dans les titres de
+// la liste a gauche. Le texte est relu dans le PDF lui-meme (pdf.js
+// `getTextContent`) : c'est exactement celui qu'on lit a l'ecran, dans le meme
+// repere que les mesures -- donc on peut le SURLIGNER a sa place et s'y
+// rendre. Les annotations posees dans la visionneuse sont cherchees aussi.
+var TXT = {};                     // id plan -> mots releves dans le PDF
+var resu = [], resI = -1;         // resultats, et resultat courant
+var rechQ = "", rechTous = false, rechJeton = 0, sautRes = null, rechMin = null;
+
+// Minuscules SANS accent, en gardant la correspondance vers le texte
+// d'origine : « Réservation » se trouve en tapant « reservation », et on sait
+// quand meme quelles lettres surligner.
+function aplatir(s){
+  var t = "", m = [];
+  for(var i=0;i<s.length;i++){
+    var c = s.charAt(i).toLowerCase();
+    try{ c = c.normalize("NFD").replace(/[̀-ͯ]/g, ""); }catch(e){}
+    if(!c) c = s.charAt(i).toLowerCase();
+    for(var j=0;j<c.length;j++){ t += c.charAt(j); m.push(i); }
+  }
+  m.push(s.length);
+  return {t:t, m:m};
+}
+
+// Mots d'un plan, avec leur place sur la feuille. Le plan n'a pas besoin
+// d'etre ouvert : on charge son PDF le temps de le lire, puis on le referme
+// (un carnet pese plusieurs Mo, on n'en garde pas cinquante en memoire). Le
+// releve, lui, est garde : la recherche suivante est immediate.
+function motsDuPlan(p, ok){
+  if(TXT[p.id]) return ok(TXT[p.id]);
+  function relever(pg, fini){
+    pg.getTextContent().then(function(tc){
+      var vp = pg.getViewport({scale:1}), U = pdfjsLib.Util, out = [];
+      (tc.items||[]).forEach(function(it){
+        var s = it.str;
+        if(!s || !s.replace(/\s/g,"")) return;
+        // matrice du texte ramenee dans le repere de la page (Y vers le bas),
+        // celui des mesures et des annotations
+        var tx = U.transform(vp.transform, it.transform);
+        var n = Math.hypot(tx[0], tx[1]) || 1;
+        out.push({s:s, plat:aplatir(s),
+                  x:tx[4], y:tx[5],            // debut du texte (ligne de base)
+                  ux:tx[0]/n, uy:tx[1]/n,      // sens de lecture (texte tourne compris)
+                  hx:tx[2], hy:tx[3],          // hauteur des lettres, vers le haut
+                  w:it.width || 0});
+      });
+      TXT[p.id] = out; fini(out);
+    })["catch"](function(){ TXT[p.id] = []; fini([]); });
+  }
+  if(cache[p.id]) return relever(cache[p.id].page, ok);
+  chargerOctets(p, function(octets){
+    var docu = null;
+    pdfjsLib.getDocument({data:octets, worker:worker()}).promise.then(function(pdf){
+      docu = pdf; return pdf.getPage(1);
+    }).then(function(pg){
+      relever(pg, function(l){ try{ docu.destroy(); }catch(e){} ok(l); });
+    })["catch"](function(){
+      try{ if(docu) docu.destroy(); }catch(e){}
+      TXT[p.id] = []; ok([]);
+    });
+  }, function(){ TXT[p.id] = []; ok([]); });
+}
+
+function chercherMots(p, mots, q, sortie){
+  for(var i=0;i<mots.length;i++){
+    var it = mots[i], d = 0, k;
+    while((k = it.plat.t.indexOf(q, d)) >= 0){
+      sortie.push({p:p, it:it, s:it.s,
+                   i0:it.plat.m[k], i1:it.plat.m[k + q.length]});
+      d = k + Math.max(1, q.length);
+    }
+  }
+}
+
+function chercherAnnots(p, q, sortie){
+  (annots[p.id] || []).forEach(function(a){
+    if(!a.txt) return;
+    var pl = aplatir(a.txt), k = pl.t.indexOf(q);
+    if(k < 0) return;
+    sortie.push({p:p, ann:a, s:a.txt, i0:pl.m[k], i1:pl.m[k + q.length]});
+  });
+}
+
+// Quadrilatere du texte trouve, en coordonnees feuille (le texte d'un plan
+// peut etre tourne : on travaille avec les 4 coins, pas avec un rectangle).
+function quadRes(r){
+  if(r.ann) return coinsTexte(r.ann);
+  var it = r.it, n = it.s.length || 1;
+  var d0 = it.w * (r.i0 / n), d1 = it.w * (r.i1 / n);
+  if(d1 - d0 < 0.5) d1 = d0 + Math.max(0.5, it.w / n);
+  var a = {x: it.x + it.ux*d0, y: it.y + it.uy*d0};
+  var b = {x: it.x + it.ux*d1, y: it.y + it.uy*d1};
+  return [a, b, {x:b.x + it.hx, y:b.y + it.hy}, {x:a.x + it.hx, y:a.y + it.hy}];
+}
+
+function dessinerTrouves(){
+  if(!plan) return;
+  for(var i=0;i<resu.length;i++){
+    if(resu[i].p.id !== plan.id) continue;
+    var q = quadRes(resu[i]).map(versEcran), cour = (i === resI);
+    ctx.beginPath();
+    ctx.moveTo(q[0].x, q[0].y);
+    for(var k=1;k<4;k++) ctx.lineTo(q[k].x, q[k].y);
+    ctx.closePath();
+    ctx.fillStyle = cour ? "rgba(255,160,0,.45)" : "rgba(255,225,0,.28)";
+    ctx.fill();
+    if(cour){ ctx.strokeStyle = "#ff9500"; ctx.lineWidth = 1.5; ctx.stroke(); }
+  }
+}
+
+// Amene le resultat au centre de l'ecran, assez pres pour etre LU sans jamais
+// le faire deborder.
+function cadrerSur(r){
+  var q = quadRes(r), x0=1e9, y0=1e9, x1=-1e9, y1=-1e9;
+  q.forEach(function(pt){
+    x0=Math.min(x0,pt.x); y0=Math.min(y0,pt.y);
+    x1=Math.max(x1,pt.x); y1=Math.max(y1,pt.y);
+  });
+  var rc = stage.getBoundingClientRect();
+  if(rc.width < 2 || rc.height < 2) return;
+  var w = Math.max(x1-x0, 1), h = Math.max(y1-y0, 1);
+  zoom = Math.max(0.05, Math.min(rc.width*0.45/w, rc.height*0.45/h, 5));
+  besoinFit = false; autoCadre = false;
+  panX = rc.width/2 - (x0+x1)/2*zoom;
+  panY = rc.height/2 - (y0+y1)/2*zoom;
+  planifier();
+}
+
+function allerRes(i){
+  if(!resu.length) return;
+  resI = (i + resu.length) % resu.length;
+  var r = resu[resI];
+  majCourant();
+  if(!plan || r.p.id !== plan.id){ sautRes = r; ouvrir(r.p); return; }
+  cadrerSur(r);
+}
+
+function echapper(s){
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+// Liste des resultats : seulement quand on cherche dans TOUS les plans (sinon
+// tout est deja visible sur la feuille affichee).
+var RES_MAX = 300;
+function listerRes(){
+  var box = $("rRes");
+  box.classList.toggle("on", rechTous && resu.length > 0);
+  if(!(rechTous && resu.length)){ box.innerHTML = ""; return; }
+  box.innerHTML = "";
+  resu.slice(0, RES_MAX).forEach(function(r, i){
+    var b = document.createElement("button");
+    b.className = (i === resI ? "on" : "");
+    b.innerHTML = '<div class="pl"></div><div class="tx"></div>';
+    b.children[0].textContent = r.p.num + (r.ann ? " · annotation" : "");
+    b.children[1].innerHTML = echapper(r.s.slice(0, r.i0)) + "<mark>" +
+      echapper(r.s.slice(r.i0, r.i1)) + "</mark>" + echapper(r.s.slice(r.i1));
+    b.title = r.p.num + " — " + r.p.nom;
+    b.onclick = function(){ allerRes(i); };
+    box.appendChild(b);
+  });
+  if(resu.length > RES_MAX){
+    var d = document.createElement("div");
+    d.className = "pl";
+    d.style.padding = "6px 8px";
+    d.textContent = "… " + (resu.length - RES_MAX) + " autres résultats";
+    box.appendChild(d);
+  }
+}
+
+function majCourant(){
+  var b = $("rRes").children;
+  for(var i=0;i<b.length;i++)
+    if(b[i].className !== undefined) b[i].className = (i === resI ? "on" : "");
+  majNb();
+  dessiner();
+}
+
+var rechEtat = null;              // {n, tot} pendant un balayage de tous les plans
+function majNb(){
+  var nb = $("rNb");
+  if(!rechQ){ nb.textContent = "—"; }
+  else if(rechEtat) nb.textContent = resu.length + " · " + rechEtat.n + "/" + rechEtat.tot + " plans…";
+  else if(!resu.length) nb.textContent = "aucun";
+  else nb.textContent = (resI >= 0 ? resI+1 : 1) + "/" + resu.length;
+  $("rPrec").disabled = $("rSuiv").disabled = !resu.length;
+}
+
+function lancerRecherche(){
+  var mien = ++rechJeton;
+  rechQ = aplatir($("rIn").value.trim()).t;
+  resu = []; resI = -1; rechEtat = null;
+  if(!rechQ){ majNb(); listerRes(); dessiner(); return; }
+  var liste = rechTous ? PLANS.slice() : (plan ? [plan] : []);
+  if(!liste.length){ majNb(); listerRes(); dessiner(); return; }
+  var n = 0;
+  (function suite(){
+    if(mien !== rechJeton) return;              // frappe suivante : on abandonne
+    if(n >= liste.length){
+      rechEtat = null; listerRes();
+      if(resu.length) allerRes(0); else { majNb(); dessiner(); }
+      return;
+    }
+    var p = liste[n++];
+    rechEtat = (liste.length > 1) ? {n:n, tot:liste.length} : null;
+    majNb();
+    motsDuPlan(p, function(mots){
+      if(mien !== rechJeton) return;
+      chercherMots(p, mots, rechQ, resu);
+      chercherAnnots(p, rechQ, resu);
+      majNb(); dessiner();
+      setTimeout(suite, 0);                     // laisse l'interface respirer
+    });
+  })();
+}
+
+function ouvrirRech(){
+  $("rech").classList.add("on");
+  var i = $("rIn");
+  i.focus(); i.select();
+}
+function fermerRech(){
+  rechJeton++;                                  // arrete un balayage en cours
+  $("rech").classList.remove("on");
+  resu = []; resI = -1; rechQ = ""; rechEtat = null;
+  $("rIn").blur(); majNb(); listerRes(); dessiner();
+}
+
+$("rIn").oninput = function(){
+  clearTimeout(rechMin);
+  rechMin = setTimeout(lancerRecherche, 220);
+};
+$("rIn").onkeydown = function(e){
+  if(e.key === "Enter"){
+    e.preventDefault(); e.stopPropagation();
+    clearTimeout(rechMin);
+    if(rechQ !== aplatir($("rIn").value.trim()).t) lancerRecherche();
+    else allerRes(resI + (e.shiftKey ? -1 : 1));
+  }else if(e.key === "Escape"){
+    e.preventDefault(); e.stopPropagation(); fermerRech();
+  }
+};
+$("rSuiv").onclick = function(){ allerRes(resI + 1); };
+$("rPrec").onclick = function(){ allerRes(resI - 1); };
+$("rFerm").onclick = fermerRech;
+$("bRech").onclick = ouvrirRech;
+$("rTous").onchange = function(){
+  rechTous = this.checked;
+  lancerRecherche();
+};
 
 // ---------------------------------------------------------------- calibration
 function lancerCalibration(){

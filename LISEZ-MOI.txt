@@ -13,7 +13,12 @@ connexion : tout est dans le dossier.
   - liste des plans a gauche (avec recherche)
   - molette = zoom, glisser = deplacer, double-clic = ajuster
   - bouton "Mesurer" puis 2 clics = cote reelle
-  - raccourcis : M mesurer, F ajuster, fleches = plan suivant/precedent
+  - Ctrl+F (ou bouton "Rechercher") = chercher un TEXTE DANS les plans
+    (repere de poteau, nom de coupe, annotation...) : le texte trouve est
+    surligne sur la feuille ; "chercher dans tous les plans" balaie le carnet
+    entier et Entree passe au resultat suivant
+  - raccourcis : M mesurer, F ajuster, Ctrl+F rechercher,
+    fleches = plan suivant/precedent
 
 L'echelle est detectee automatiquement selon la vue sous le trait
 (1:50, 1:100...). Si un plan n'a pas d'echelle connue, la visionneuse le
