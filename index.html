@@ -272,6 +272,7 @@ select{
       <span id="zoomval">—</span>
       <button id="bIn" title="Zoom avant">+</button>
       <button id="bFit" title="Ajuster à l'écran (F)">Ajuster</button>
+      <button id="bTrace" class="on" hidden title="Afficher / masquer la trace : plan superposé en fond, gabarit IMPACT (T)">Trace</button>
       <span class="sep"></span>
       <button id="bMes" title="Mesurer : cliquez 2 points (M)">Mesurer</button>
       <button id="bSnap" class="on" title="Accrochage : extrémité, milieu, intersection, sur le trait, parallèle (A)">Accrochage</button>
@@ -414,7 +415,7 @@ document.write('<script src="donnees.js' + window.FRAIS + '"><\/script>');
 // 10 minutes. On compare donc le numero grave ici a celui du serveur, et on
 // se recharge sur une adresse que le cache ne connait pas.
 (function(){
-  var ici = "20260918145944";
+  var ici = "20260918151246";
   if(ici.charAt(0) === "{") return;                  // dossier de developpement
   var enLigne = (typeof VERSION !== "undefined") ? VERSION : null;
 
@@ -650,8 +651,42 @@ function versMm(q){
 }
 
 // ---------------------------------------------------------------- ouverture
-function ouvrir(p){
-  if(plan && p && p.id===plan.id) return;
+// TRACE : sur les feuilles qui ont une vue « Impact » superposee (gabarit
+// IMPACT dans Revit), l'outil publie un 2e PDF SANS elle. `trace` dit lequel
+// afficher ; les deux ont exactement le meme format de page, donc mesures,
+// annotations et recherche restent calees quand on bascule.
+var trace = true;
+try{ trace = localStorage.getItem("fa_trace") !== "0"; }catch(e){}
+var vueGardee = null;        // cadrage a conserver pendant la bascule
+
+// Le PDF a lire pour ce plan, selon la trace demandee.
+function source(p){
+  if(!trace && p.trace && p.trace.fichier)
+    return {id:p.trace.id, fichier:p.trace.fichier, num:p.num};
+  return p;
+}
+
+function majBoutonTrace(){
+  var b = $("bTrace"), a = !!(plan && plan.trace && plan.trace.fichier);
+  b.hidden = !a;
+  b.classList.toggle("on", a && trace);
+}
+
+function basculerTrace(){
+  if(!(plan && plan.trace && plan.trace.fichier)) return;
+  trace = !trace;
+  try{ localStorage.setItem("fa_trace", trace ? "1" : "0"); }catch(e){}
+  // les accrochages ont ete construits sur l'autre PDF : a refaire
+  if(!plan._snapEnCours){ plan._snap = null; plan._snapKo = false; }
+  vueGardee = {zoom:zoom, panX:panX, panY:panY, auto:autoCadre};
+  ouvrir(plan, true);
+  indice(trace ? "Trace affichée" : "Trace masquée", 1800);
+}
+
+function ouvrir(p, forcer){
+  if(!forcer && plan && p && p.id===plan.id) return;
+  if(!forcer) vueGardee = null;
+  var src = source(p);
   var mien = ++jeton;
   plan=p; page=null; tuile=null; pts=[]; survol=null; forceEch=0;
   curseur=null; accroche=null; refsPara=[];
@@ -663,18 +698,18 @@ function ouvrir(p){
   var jd=$("infoDate");
   jd.hidden=!p.date; jd.className="tag";
   jd.textContent=p.date ? "PDF du "+p.date : "";
-  listerPlans(); majSelectEchelle(); dessiner();
+  listerPlans(); majSelectEchelle(); majBoutonTrace(); dessiner();
 
-  if(cache[p.id]){ page=cache[p.id].page; apresChargement(); return; }
+  if(cache[src.id]){ page=cache[src.id].page; apresChargement(); return; }
   indice("Chargement de "+p.num+"…",0);
-  chargerOctets(p, function(octets){
+  chargerOctets(src, function(octets){
     if(mien!==jeton) return;
     var doc;
     pdfjsLib.getDocument({data:octets, worker:worker()}).promise.then(function(pdf){
     doc=pdf; return pdf.getPage(1);
   }).then(function(pg){
     if(mien!==jeton){ try{doc.destroy()}catch(e){} return; }
-    ranger(p.id, doc, pg); page=pg;
+    ranger(src.id, doc, pg); page=pg;
     var v=pg.getViewport({scale:1});
     calerPapier(p, v.width, v.height);
     indice("",0); apresChargement();
@@ -749,7 +784,12 @@ function chargerOctets(p, ok, ko){
 }
 function apresChargement(){
   majSelectEchelle();
-  ajuster();
+  if(vueGardee){
+    // bascule de la trace : on reste exactement au meme endroit
+    zoom=vueGardee.zoom; panX=vueGardee.panX; panY=vueGardee.panY;
+    autoCadre=vueGardee.auto; besoinFit=false; vueGardee=null;
+    planifier();
+  }else ajuster();
   // le plan a ete ouvert pour montrer un resultat de recherche : on s'y rend
   // maintenant que sa taille de page est connue (ajuster() vient de cadrer)
   if(sautRes && plan && sautRes.p.id === plan.id){
@@ -1851,7 +1891,7 @@ function telecharger(octets, nom){
 // octets DECHIFFRES d'un plan, qu'il soit deja ouvert ou non
 function octetsDuPlan(p){
   return new Promise(function(ok, ko){
-    chargerOctets(p, ok, function(m){ ko(new Error(m)); });
+    chargerOctets(source(p), ok, function(m){ ko(new Error(m)); });
   });
 }
 
@@ -2153,6 +2193,7 @@ document.addEventListener("keydown",function(e){
     e.preventDefault(); supprimerAnnot(); majPanneau();
   }
   else if(k==="f") cadrer();
+  else if(k==="t") basculerTrace();
   else if(k==="escape"){
     if($("rech").classList.contains("on")) fermerRech();
     pts=[]; survol=null; indice("",0); dessiner();
@@ -2194,28 +2235,29 @@ function aplatir(s){
 // (un carnet pese plusieurs Mo, on n'en garde pas cinquante en memoire). Le
 // releve, lui, est garde : la recherche suivante est immediate.
 function motsDuPlan(p, ok){
-  if(TXT[p.id]) return ok(TXT[p.id]);
+  var s = source(p);                // PDF affiche : avec ou sans trace
+  if(TXT[s.id]) return ok(TXT[s.id]);
   function relever(pg, fini){
     pg.getTextContent().then(function(tc){
       var vp = pg.getViewport({scale:1}), U = pdfjsLib.Util, out = [];
       (tc.items||[]).forEach(function(it){
-        var s = it.str;
-        if(!s || !s.replace(/\s/g,"")) return;
+        var st = it.str;
+        if(!st || !st.replace(/\s/g,"")) return;
         // matrice du texte ramenee dans le repere de la page (Y vers le bas),
         // celui des mesures et des annotations
         var tx = U.transform(vp.transform, it.transform);
         var n = Math.hypot(tx[0], tx[1]) || 1;
-        out.push({s:s, plat:aplatir(s),
+        out.push({s:st, plat:aplatir(st),
                   x:tx[4], y:tx[5],            // debut du texte (ligne de base)
                   ux:tx[0]/n, uy:tx[1]/n,      // sens de lecture (texte tourne compris)
                   hx:tx[2], hy:tx[3],          // hauteur des lettres, vers le haut
                   w:it.width || 0});
       });
-      TXT[p.id] = out; fini(out);
-    })["catch"](function(){ TXT[p.id] = []; fini([]); });
+      TXT[s.id] = out; fini(out);
+    })["catch"](function(){ TXT[s.id] = []; fini([]); });
   }
-  if(cache[p.id]) return relever(cache[p.id].page, ok);
-  chargerOctets(p, function(octets){
+  if(cache[s.id]) return relever(cache[s.id].page, ok);
+  chargerOctets(s, function(octets){
     var docu = null;
     pdfjsLib.getDocument({data:octets, worker:worker()}).promise.then(function(pdf){
       docu = pdf; return pdf.getPage(1);
@@ -2223,9 +2265,9 @@ function motsDuPlan(p, ok){
       relever(pg, function(l){ try{ docu.destroy(); }catch(e){} ok(l); });
     })["catch"](function(){
       try{ if(docu) docu.destroy(); }catch(e){}
-      TXT[p.id] = []; ok([]);
+      TXT[s.id] = []; ok([]);
     });
-  }, function(){ TXT[p.id] = []; ok([]); });
+  }, function(){ TXT[s.id] = []; ok([]); });
 }
 
 function chercherMots(p, mots, q, sortie){
@@ -2410,6 +2452,7 @@ $("rSuiv").onclick = function(){ allerRes(resI + 1); };
 $("rPrec").onclick = function(){ allerRes(resI - 1); };
 $("rFerm").onclick = fermerRech;
 $("bRech").onclick = ouvrirRech;
+$("bTrace").onclick = basculerTrace;
 $("rTous").onchange = function(){
   rechTous = this.checked;
   lancerRecherche();

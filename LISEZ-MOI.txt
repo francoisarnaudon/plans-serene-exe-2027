@@ -17,7 +17,9 @@ connexion : tout est dans le dossier.
     (repere de poteau, nom de coupe, annotation...) : le texte trouve est
     surligne sur la feuille ; "chercher dans tous les plans" balaie le carnet
     entier et Entree passe au resultat suivant
-  - raccourcis : M mesurer, F ajuster, Ctrl+F rechercher,
+  - bouton "Trace" (feuilles avec un plan superpose en fond, gabarit IMPACT) :
+    affiche / masque ce plan de fond
+  - raccourcis : M mesurer, F ajuster, T trace, Ctrl+F rechercher,
     fleches = plan suivant/precedent
 
 L'echelle est detectee automatiquement selon la vue sous le trait
