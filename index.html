@@ -432,7 +432,7 @@ document.write('<script src="donnees.js' + window.FRAIS + '"><\/script>');
 // 10 minutes. On compare donc le numero grave ici a celui du serveur, et on
 // se recharge sur une adresse que le cache ne connait pas.
 (function(){
-  var ici = "20260921133352";
+  var ici = "20260921140153";
   if(ici.charAt(0) === "{") return;                  // dossier de developpement
   var enLigne = (typeof VERSION !== "undefined") ? VERSION : null;
 
@@ -1924,14 +1924,169 @@ function decoupeDemandee(p){
 // On passe par le repère de la visionneuse (points, Y vers le bas), le seul
 // où l'emprise papier retenue par calerPapier() a un sens, puis par la
 // matrice de pdf.js, qui tient compte de /Rotate et de la CropBox.
-function folioEnPdf(p, f, mat){
-  var r = f.rect_mm, k = 1 / p._mmParPt, U = pdfjsLib.Util;
-  var a = U.applyTransform([(r[0] - p._pap.mm[0]) * k,
-                            (p._pap.mm[3] - r[3]) * k], mat);
-  var b = U.applyTransform([(r[2] - p._pap.mm[0]) * k,
-                            (p._pap.mm[3] - r[1]) * k], mat);
+// rectangle du folio dans le repère de la visionneuse (points, Y vers le bas)
+function folioEnPoints(p, f){
+  var r = f.rect_mm, k = 1 / p._mmParPt;
+  return {g:(r[0] - p._pap.mm[0]) * k, d:(r[2] - p._pap.mm[0]) * k,
+          h:(p._pap.mm[3] - r[3]) * k, b:(p._pap.mm[3] - r[1]) * k};
+}
+
+function folioEnPdf(p, f, mat, rec){
+  var q = folioEnPoints(p, f), U = pdfjsLib.Util;
+  var a = U.applyTransform([rec.ax * q.g + rec.bx, rec.ay * q.h + rec.by], mat);
+  var b = U.applyTransform([rec.ax * q.d + rec.bx, rec.ay * q.b + rec.by], mat);
   return {g:Math.min(a[0],b[0]), d:Math.max(a[0],b[0]),
           b:Math.min(a[1],b[1]), h:Math.max(a[1],b[1])};
+}
+
+// ------------------------------------------- recalage sur les traits du PDF
+// POURQUOI : sur un carnet géant, le PDF de Revit n'est PAS tout à fait à
+// l'échelle qu'il annonce. Un PDF ne peut pas dépasser 200 pouces (5 080 mm) :
+// Revit réduit donc la feuille entière pour tenir dans cette limite, et son
+// facteur de réduction est arrondi. Mesuré sur un carnet de 34,6 m : le dessin
+// est 0,032 % plus grand que la page et centré dessus, soit ±5,5 mm aux deux
+// extrémités (le 1er folio décalé à gauche, celui du milieu juste, le dernier
+// décalé à droite). Découper aux millimètres annoncés laissait donc une bande
+// blanche d'un côté et rognait le cadre de l'autre.
+//
+// On recale donc le découpage sur le DESSIN : les bords des cartouches sont
+// des traits longs (toute la hauteur / toute la largeur du folio). On relève
+// ces traits, on apparie chacun au bord de folio prédit le plus proche, et on
+// en tire une correction affine (a·x + b) par axe. Le décalage est une erreur
+// d'échelle GLOBALE : une droite la corrige exactement. Si l'appariement
+// échoue (cartouche sans cadre, trop peu de traits trouvés) ou si la
+// correction sort des clous, on garde le calcul d'origine : mieux vaut la
+// petite marge qu'un folio cadré n'importe où.
+var RECAL_NEUTRE = {ax:1, bx:0, ay:1, by:0};
+
+function traitsLongs(octets, minV, minH){
+  return pdfjsLib.getDocument({data: octets.slice(), worker: worker()}).promise
+    .then(function(pdf){
+      return pdf.getPage(1).then(function(pg){
+        return pg.getOperatorList().then(function(ol){
+          var U = pdfjsLib.Util, OPS = pdfjsLib.OPS;
+          var cur = pg.getViewport({scale:1}).transform.slice(), pile = [];
+          var vert = [], hori = [], cx = 0, cy = 0, sx = 0, sy = 0;
+          function T(x, y){ return U.applyTransform([x, y], cur); }
+          function seg(a, b){
+            var dx = b[0] - a[0], dy = b[1] - a[1];
+            if(Math.abs(dx) <= 0.05 && Math.abs(dy) >= minV) vert.push(a[0]);
+            else if(Math.abs(dy) <= 0.05 && Math.abs(dx) >= minH) hori.push(a[1]);
+          }
+          for(var i = 0; i < ol.fnArray.length; i++){
+            var fn = ol.fnArray[i], a = ol.argsArray[i];
+            if(fn === OPS.save) pile.push(cur.slice());
+            else if(fn === OPS.restore) cur = pile.pop() || cur;
+            else if(fn === OPS.transform) cur = U.transform(cur, a);
+            else if(fn === OPS.paintFormXObjectBegin){
+              pile.push(cur.slice());
+              if(a && a[0]) cur = U.transform(cur, a[0]);
+            }
+            else if(fn === OPS.paintFormXObjectEnd) cur = pile.pop() || cur;
+            else if(fn === OPS.constructPath){
+              var ops = a[0], args = a[1];
+              for(var k = 0, j = 0; k < ops.length; k++){
+                var o = ops[k];
+                if(o === OPS.rectangle){
+                  var p1 = T(args[j], args[j+1]);
+                  var p2 = T(args[j] + args[j+2], args[j+1] + args[j+3]);
+                  seg(p1, [p1[0], p2[1]]); seg(p2, [p2[0], p1[1]]);
+                  seg(p1, [p2[0], p1[1]]); seg(p2, [p1[0], p2[1]]);
+                  j += 4;
+                }else if(o === OPS.moveTo){
+                  cx = args[j]; cy = args[j+1]; sx = cx; sy = cy; j += 2;
+                }else if(o === OPS.lineTo){
+                  seg(T(cx, cy), T(args[j], args[j+1]));
+                  cx = args[j]; cy = args[j+1]; j += 2;
+                }else if(o === OPS.curveTo){ cx = args[j+4]; cy = args[j+5]; j += 6; }
+                else if(o === OPS.curveTo2 || o === OPS.curveTo3){
+                  cx = args[j+2]; cy = args[j+3]; j += 4;
+                }else if(o === OPS.closePath){
+                  seg(T(cx, cy), T(sx, sy)); cx = sx; cy = sy;
+                }
+              }
+            }
+          }
+          try{ pdf.destroy(); }catch(e){}
+          function net(l){
+            var vu = {}, out = [];
+            l.forEach(function(v){
+              var c = Math.round(v * 100) / 100;
+              if(!vu[c]){ vu[c] = 1; out.push(c); }
+            });
+            return out.sort(function(a, b){ return a - b; });
+          }
+          return {vert:net(vert), hori:net(hori)};
+        });
+      });
+    });
+}
+
+// bords prédits -> bords trouvés : appariement au plus proche, puis droite
+// des moindres carrés. Renvoie null si trop peu de bords retrouvés.
+function droiteSeule(predits, trouves, tol, mini){
+  var xs = [], ys = [];
+  predits.forEach(function(v){
+    var best = null, d = tol;
+    for(var i = 0; i < trouves.length; i++){
+      var e = Math.abs(trouves[i] - v);
+      if(e < d){ d = e; best = trouves[i]; }
+    }
+    if(best !== null){ xs.push(v); ys.push(best); }
+  });
+  if(xs.length < mini) return null;
+  var n = xs.length, sx = 0, sy = 0, sxx = 0, sxy = 0;
+  for(var i = 0; i < n; i++){
+    sx += xs[i]; sy += ys[i]; sxx += xs[i] * xs[i]; sxy += xs[i] * ys[i];
+  }
+  var den = n * sxx - sx * sx;
+  if(Math.abs(den) < 1e-9) return null;
+  var a = (n * sxy - sx * sy) / den;
+  return {a:a, b:(sy - a * sx) / n, n:n};
+}
+
+// DEUX passes : la première tolère largement (le bord peut être à plusieurs
+// millimètres), ce qui laisse passer quelques appariements sur un trait
+// INTÉRIEUR du cartouche ; la seconde, faite sur les bords déjà redressés,
+// serre la tolérance et ne retient plus que les vrais bords. Mesuré sur le
+// carnet de 34,6 m : résidu ramené de 0,27 mm à moins de 0,05 mm.
+function droiteDeRecalage(predits, trouves, tol, mini){
+  var d1 = droiteSeule(predits, trouves, tol, mini);
+  if(!d1) return null;
+  var d2 = droiteSeule(predits.map(function(v){ return d1.a * v + d1.b; }),
+                       trouves, tol / 6, mini);
+  if(!d2) return d1;
+  return {a:d2.a * d1.a, b:d2.a * d1.b + d2.b, n:d2.n};
+}
+
+function recalageFolios(p, fol, octets){
+  if(p._recal) return Promise.resolve(p._recal);
+  var L = [], H = [], q = [];
+  fol.forEach(function(f){
+    var r = folioEnPoints(p, f);
+    q.push(r); L.push(r.d - r.g); H.push(r.b - r.h);
+  });
+  L.sort(function(a, b){ return a - b; });
+  H.sort(function(a, b){ return a - b; });
+  var lm = L[L.length >> 1], hm = H[H.length >> 1];   // folio médian
+  if(!(lm > 0) || !(hm > 0)) return Promise.resolve(RECAL_NEUTRE);
+  return traitsLongs(octets, hm * 0.7, lm * 0.7).then(function(t){
+    var bx = [], by = [];
+    q.forEach(function(r){ bx.push(r.g); bx.push(r.d); by.push(r.h); by.push(r.b); });
+    var rec = {ax:1, bx:0, ay:1, by:0};
+    var mini = Math.max(4, Math.round(bx.length * 0.4));
+    var dx = droiteDeRecalage(bx, t.vert, lm * 0.03, mini);
+    var dy = droiteDeRecalage(by, t.hori, hm * 0.03, mini);
+    // garde-fous : on corrige une dérive, pas un cadrage fantaisiste
+    if(dx && Math.abs(dx.a - 1) < 0.01 && Math.abs(dx.b) < lm){
+      rec.ax = dx.a; rec.bx = dx.b;
+    }
+    if(dy && Math.abs(dy.a - 1) < 0.01 && Math.abs(dy.b) < hm){
+      rec.ay = dy.a; rec.by = dy.b;
+    }
+    p._recal = rec;
+    return rec;
+  })["catch"](function(){ return RECAL_NEUTRE; });
 }
 
 // format de page VU par le lecteur, pour un folio de visW x visH points
@@ -1942,7 +2097,7 @@ function formatFolio(fmt, visL, visH){
 }
 
 function decouperEnFolios(p, octets){
-  var fol = foliosDe(p), inf = null;
+  var fol = foliosDe(p), inf = null, rec = RECAL_NEUTRE;
   if(fol.length < 2) return Promise.resolve(octets);
   var fmt = $("expoFmt").value;
   return chargerFusion()
@@ -1951,6 +2106,10 @@ function decouperEnFolios(p, octets){
       inf = i;
       // plan jamais ouvert : son emprise papier n'a pas encore été calée
       if(!p._pap || !p._mmParPt) calerPapier(p, i.larg, i.haut);
+      return recalageFolios(p, fol, octets);
+    })
+    .then(function(r){
+      rec = r;
       return PDFLib.PDFDocument.load(octets);
     })
     .then(function(src){
@@ -1965,11 +2124,23 @@ function decouperEnFolios(p, octets){
         var bo = null;
         try{ bo = sp.getCropBox(); }catch(e){}
         if(!bo || !(bo.width > 0)) bo = sp.getMediaBox();
+        // CADRE DU FORMULAIRE : la page source PLUS les folios. Un formulaire
+        // rogne à son cadre, et le dessin de Revit DÉBORDE de sa propre page
+        // (cf. recalage ci-dessus) : s'en tenir à la page source rognait une
+        // bande du premier et du dernier folio. On l'élargit donc juste assez
+        // pour les contenir -- pas plus : chaque page ne montre de toute façon
+        // que son folio, donc rien d'autre ne peut apparaître.
+        var rects = fol.map(function(f){ return folioEnPdf(p, f, inf.mat, rec); });
         var cadre = {left:bo.x, bottom:bo.y,
                      right:bo.x + bo.width, top:bo.y + bo.height};
+        rects.forEach(function(c){
+          cadre.left = Math.min(cadre.left, c.g);
+          cadre.right = Math.max(cadre.right, c.d);
+          cadre.bottom = Math.min(cadre.bottom, c.b);
+          cadre.top = Math.max(cadre.top, c.h);
+        });
         return sortie.embedPage(sp, cadre).then(function(emb){
-          fol.forEach(function(f){
-            var c = folioEnPdf(p, f, inf.mat);
+          rects.forEach(function(c){
             var w = c.d - c.g, h = c.h - c.b;
             if(w < 1 || h < 1) return;
             var visL = couche ? h : w, visH = couche ? w : h;
