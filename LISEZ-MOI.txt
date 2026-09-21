@@ -79,6 +79,27 @@ Ce sont les PDF d'origine, a l'echelle : imprimables tels quels, et
 mesurables dans n'importe quel lecteur. Rien n'est reconstruit.
 
 
+IMPRIMER UN CARNET FOLIO PAR FOLIO
+----------------------------------
+Un carnet est UNE feuille geante portant des dizaines de cartouches :
+on ne l'imprime pas telle quelle. Dans la fenetre PDF, cochez
+
+   [x] decouper les carnets en folios        [ A3 ]
+
+et chaque cartouche sort sur sa propre page, cadree dessus et mise a
+l'echelle du format choisi - exactement ce que fait "Impression carnet"
+dans Revit. Un cartouche dessine plus grand que la page est reduit pour
+y tenir ; un cartouche portrait sort en page portrait.
+
+   A3 / A4        : toutes les pages au meme format
+   taille reelle  : chaque page a la taille vraie de son cartouche
+
+Le PDF obtenu s'imprime ensuite normalement, y compris vers PDFCreator.
+Les feuilles ordinaires (un seul cartouche) ne sont pas decoupees.
+La case reste grisee si le dossier a ete publie AVANT cette fonction :
+relancez alors "Visionneuse web" dans Revit sur ce dossier.
+
+
 PUBLIER UN LIEN FIXE (gratuit, une seule vraie fois)
 ----------------------------------------------------
 GitHub Pages heberge ce dossier a une adresse qui ne changera plus.

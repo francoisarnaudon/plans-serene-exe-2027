@@ -177,6 +177,7 @@ select{
 #expo button:disabled{opacity:.5}
 #expo .petit{display:flex;gap:6px;margin:8px 0 0}
 #expo .petit button{flex:0 0 auto;padding:4px 10px;font-size:12px}
+#expo .petit select{padding:3px 6px;font-size:12px;margin-left:auto}
 #expo .etat{color:var(--fg2);font-size:12px;margin-top:10px;min-height:16px}
 #coffre{
   position:fixed;inset:0;z-index:60;display:none;align-items:center;
@@ -280,7 +281,7 @@ select{
       <span class="sep"></span>
       <button id="bRech" title="Rechercher un texte dans les plans (Ctrl+F)">Rechercher</button>
       <button id="bAnn" title="Annoter le plan : bulles, flèches, textes (N)">Annoter</button>
-      <button id="bPdf" title="Enregistrer des plans en PDF (P)">PDF</button>
+      <button id="bPdf" title="Enregistrer des plans en PDF, carnets découpés en folios si besoin (P)">PDF</button>
       <span class="sp"></span>
       <select id="selEch" title="Échelle utilisée pour convertir les mesures"></select>
       <select id="selUnit" title="Unité d'affichage">
@@ -369,7 +370,9 @@ select{
 <div id="expo"><div class="bloc">
   <h3>Enregistrer en PDF</h3>
   <p class="aide">Choisissez les plans à enregistrer. Ce sont les PDF d'origine,
-     à l'échelle, imprimables tels quels.</p>
+     à l'échelle, imprimables tels quels. Un carnet peut être découpé en
+     folios : une page par cartouche, comme « Impression carnet » dans
+     Revit.</p>
   <div class="liste" id="expoListe"></div>
   <div class="petit">
     <button id="expoTout">Tout</button>
@@ -378,6 +381,20 @@ select{
                   color:var(--fg2);font-size:12px">
       <input id="expoAnn" type="checkbox" checked> avec les annotations
     </label>
+  </div>
+  <div class="petit">
+    <label style="display:flex;align-items:center;gap:6px;
+                  color:var(--fg2);font-size:12px"
+           title="Un carnet est une seule feuille géante : chaque cartouche
+devient une page à part, cadrée dessus et mise à l'échelle du format choisi
+(comme « Impression carnet » dans Revit).">
+      <input id="expoFolios" type="checkbox"> découper les carnets en folios
+    </label>
+    <select id="expoFmt" title="Format des pages de folio">
+      <option value="A3">A3</option>
+      <option value="A4">A4</option>
+      <option value="reel">taille réelle</option>
+    </select>
   </div>
   <div class="etat" id="expoEtat"></div>
   <div class="rangee">
@@ -415,7 +432,7 @@ document.write('<script src="donnees.js' + window.FRAIS + '"><\/script>');
 // 10 minutes. On compare donc le numero grave ici a celui du serveur, et on
 // se recharge sur une adresse que le cache ne connait pas.
 (function(){
-  var ici = "20260918151246";
+  var ici = "20260921133352";
   if(ici.charAt(0) === "{") return;                  // dossier de developpement
   var enLigne = (typeof VERSION !== "undefined") ? VERSION : null;
 
@@ -1751,15 +1768,20 @@ function texteSur(txt){
 // Matrice viewport (repere de la visionneuse) -> espace utilisateur du PDF.
 // C'est pdf.js qui la fournit : elle tient compte de /Rotate ET de la CropBox,
 // que rien ne permet de deviner autrement.
-function matriceDeLaPage(octets){
+function infosDeLaPage(octets){
   return pdfjsLib.getDocument({data: octets.slice(), worker: worker()}).promise
     .then(function(pdf){
       return pdf.getPage(1).then(function(pg){
-        var m = pdfjsLib.Util.inverseTransform(pg.getViewport({scale:1}).transform);
+        var v = pg.getViewport({scale:1});
+        var m = pdfjsLib.Util.inverseTransform(v.transform);
         try{ pdf.destroy(); }catch(e){}
-        return m;
+        return {mat:m, larg:v.width, haut:v.height};
       });
     });
+}
+
+function matriceDeLaPage(octets){
+  return infosDeLaPage(octets).then(function(i){ return i.mat; });
 }
 
 function graverAnnots(doc, liste, mat){
@@ -1871,6 +1893,113 @@ function octetsAnnotes(p){
   });
 }
 
+// --------------------------------------------------- découpe en folios
+// Un carnet, c'est UNE feuille géante portant des dizaines de cartouches : on
+// ne l'imprime pas telle quelle. « Impression carnet » (Revit) en fait un PDF
+// d'une page A3 par folio ; on refait exactement cela ici, sans Revit et sans
+// PDFCreator (qu'une page web ne peut pas piloter) : le PDF publié est déjà
+// vectoriel, il suffit de le REPAGINER.
+//
+// Le PDF de la feuille est embarqué UNE SEULE fois comme objet de formulaire,
+// puis chaque page le place cadré sur son folio et mis à l'échelle du format.
+// Embarquer une fois PAR folio aurait recopié tout le carnet à chaque page
+// (des dizaines de Mo) ; ici les pages se partagent le même objet. Ce qui
+// dépasse du folio tombe hors page : c'est le format de page qui découpe,
+// comme le recadrage de la feuille le faisait dans Revit.
+var FORMATS_FOLIO = {A3:[1190.55, 841.89], A4:[841.89, 595.28]};  // pt, paysage
+
+function foliosDe(p){
+  return (p.folios || []).filter(function(f){
+    return f && f.rect_mm && f.rect_mm.length === 4;
+  });
+}
+
+function decoupeDemandee(p){
+  // un seul cartouche = une feuille ordinaire : rien à découper, on la laisse
+  // telle quelle plutôt que de la re-cadrer inutilement
+  return $("expoFolios").checked && foliosDe(p).length > 1;
+}
+
+// rectangle du folio : mm de la feuille Revit -> espace utilisateur du PDF.
+// On passe par le repère de la visionneuse (points, Y vers le bas), le seul
+// où l'emprise papier retenue par calerPapier() a un sens, puis par la
+// matrice de pdf.js, qui tient compte de /Rotate et de la CropBox.
+function folioEnPdf(p, f, mat){
+  var r = f.rect_mm, k = 1 / p._mmParPt, U = pdfjsLib.Util;
+  var a = U.applyTransform([(r[0] - p._pap.mm[0]) * k,
+                            (p._pap.mm[3] - r[3]) * k], mat);
+  var b = U.applyTransform([(r[2] - p._pap.mm[0]) * k,
+                            (p._pap.mm[3] - r[1]) * k], mat);
+  return {g:Math.min(a[0],b[0]), d:Math.max(a[0],b[0]),
+          b:Math.min(a[1],b[1]), h:Math.max(a[1],b[1])};
+}
+
+// format de page VU par le lecteur, pour un folio de visW x visH points
+function formatFolio(fmt, visL, visH){
+  if(fmt === "reel") return [visL, visH];
+  var f = FORMATS_FOLIO[fmt] || FORMATS_FOLIO.A3;
+  return (visH > visL) ? [f[1], f[0]] : [f[0], f[1]];   // portrait si le folio l'est
+}
+
+function decouperEnFolios(p, octets){
+  var fol = foliosDe(p), inf = null;
+  if(fol.length < 2) return Promise.resolve(octets);
+  var fmt = $("expoFmt").value;
+  return chargerFusion()
+    .then(function(){ return infosDeLaPage(octets); })
+    .then(function(i){
+      inf = i;
+      // plan jamais ouvert : son emprise papier n'a pas encore été calée
+      if(!p._pap || !p._mmParPt) calerPapier(p, i.larg, i.haut);
+      return PDFLib.PDFDocument.load(octets);
+    })
+    .then(function(src){
+      return PDFLib.PDFDocument.create().then(function(sortie){
+        var sp = src.getPage(0);
+        // /Rotate : le formulaire embarqué, lui, n'est JAMAIS tourné. On
+        // travaille donc en repère non tourné et on reporte la rotation sur
+        // chaque page produite -- le lecteur la redresse comme l'original.
+        var rot = 0;
+        try{ rot = ((sp.getRotation().angle % 360) + 360) % 360; }catch(e){}
+        var couche = (rot % 180) !== 0;
+        var bo = null;
+        try{ bo = sp.getCropBox(); }catch(e){}
+        if(!bo || !(bo.width > 0)) bo = sp.getMediaBox();
+        var cadre = {left:bo.x, bottom:bo.y,
+                     right:bo.x + bo.width, top:bo.y + bo.height};
+        return sortie.embedPage(sp, cadre).then(function(emb){
+          fol.forEach(function(f){
+            var c = folioEnPdf(p, f, inf.mat);
+            var w = c.d - c.g, h = c.h - c.b;
+            if(w < 1 || h < 1) return;
+            var visL = couche ? h : w, visH = couche ? w : h;
+            var P = formatFolio(fmt, visL, visH);
+            // un gros cartouche (dessiné en double, en triple...) est réduit
+            // pour tenir dans la page, comme le zoom d'« Impression carnet »
+            var s = Math.min(P[0] / visL, P[1] / visH);
+            var pl = couche ? P[1] : P[0], ph = couche ? P[0] : P[1];
+            var pg = sortie.addPage([pl, ph]);
+            if(rot) pg.setRotation(PDFLib.degrees(rot));
+            pg.drawPage(emb, {
+              x: (pl - s * w) / 2 - s * (c.g - cadre.left),
+              y: (ph - s * h) / 2 - s * (c.b - cadre.bottom),
+              xScale: s, yScale: s});
+          });
+          if(!sortie.getPageCount()) return octets;   // rien de cadrable
+          return sortie.save();
+        });
+      });
+    });
+}
+
+// octets d'un plan tels qu'on les enregistre : annotations gravées, puis
+// découpe en folios si elle est demandée
+function octetsPourExport(p){
+  return octetsAnnotes(p).then(function(u){
+    return decoupeDemandee(p) ? decouperEnFolios(p, u) : u;
+  });
+}
+
 // ------------------------------------------------------- enregistrer en PDF
 // Les plans SONT des PDF : les enregistrer ne demande aucune reconstruction.
 // Seul le regroupement en un fichier unique exige une fusion, d'ou pdf-lib,
@@ -1936,7 +2065,21 @@ function ouvrirExpo(){
     lab.appendChild(sp);
     l.appendChild(lab);
   });
-  etatExpo("");
+  // Découpe en folios : sans carnet publié, la case n'a rien à mordre. On la
+  // grise en DISANT pourquoi -- un dossier publié avant cette fonction n'a
+  // pas les rectangles de cartouches, il faut relancer l'outil dans Revit.
+  var carnets = PLANS.filter(function(p){ return foliosDe(p).length > 1; });
+  var cf = $("expoFolios"), cs = $("expoFmt");
+  cf.disabled = cs.disabled = !carnets.length;
+  if(!carnets.length){
+    cf.checked = false;
+    cf.parentNode.title = "Aucun carnet ici : ces plans n'ont qu'un cartouche,"
+      + " ou ils ont été publiés avant cette fonction (relancez alors"
+      + " « Visionneuse web » dans Revit).";
+  }
+  etatExpo(carnets.length
+    ? carnets.length + " carnet(s) découpable(s) en folios."
+    : "");
   boutonsExpo(true);
   $("expo").classList.add("on");
 }
@@ -1954,9 +2097,12 @@ function expoSepares(){
       return;
     }
     var p = choisis[i++];
-    etatExpo("Préparation " + i + "/" + choisis.length + " : " + p.num + "…");
-    octetsAnnotes(p).then(function(u){
-      telecharger(u, nomFichier(p.num + " - " + (p.nom || "plan")) + ".pdf");
+    var coupe = decoupeDemandee(p);
+    etatExpo("Préparation " + i + "/" + choisis.length + " : " + p.num +
+             (coupe ? " (" + foliosDe(p).length + " folios)" : "") + "…");
+    octetsPourExport(p).then(function(u){
+      telecharger(u, nomFichier(p.num + " - " + (p.nom || "plan") +
+                                (coupe ? " - folios" : "")) + ".pdf");
       setTimeout(suivant, 350);      // laisse le navigateur souffler
     })["catch"](function(e){
       etatExpo("Échec sur " + p.num + " : " + e.message);
@@ -1979,8 +2125,10 @@ function expoUnSeul(){
     function suivant(){
       if(i >= choisis.length) return sortie.save();
       var p = choisis[i++];
-      etatExpo("Ajout " + i + "/" + choisis.length + " : " + p.num + "…");
-      return octetsAnnotes(p)
+      etatExpo("Ajout " + i + "/" + choisis.length + " : " + p.num +
+               (decoupeDemandee(p)
+                  ? " (" + foliosDe(p).length + " folios)" : "") + "…");
+      return octetsPourExport(p)
         .then(function(u){ return PDFLib.PDFDocument.load(u); })
         .then(function(src){
           return sortie.copyPages(src, src.getPageIndices());
