@@ -432,7 +432,7 @@ document.write('<script src="donnees.js' + window.FRAIS + '"><\/script>');
 // 10 minutes. On compare donc le numero grave ici a celui du serveur, et on
 // se recharge sur une adresse que le cache ne connait pas.
 (function(){
-  var ici = "20260924124501";
+  var ici = "20260924131554";
   if(ici.charAt(0) === "{") return;                  // dossier de developpement
   var enLigne = (typeof VERSION !== "undefined") ? VERSION : null;
 
@@ -1900,12 +1900,11 @@ function octetsAnnotes(p){
 // PDFCreator (qu'une page web ne peut pas piloter) : le PDF publié est déjà
 // vectoriel, il suffit de le REPAGINER.
 //
-// Le PDF de la feuille est embarqué UNE SEULE fois comme objet de formulaire,
-// puis chaque page le place cadré sur son folio et mis à l'échelle du format.
-// Embarquer une fois PAR folio aurait recopié tout le carnet à chaque page
-// (des dizaines de Mo) ; ici les pages se partagent le même objet. Ce qui
-// dépasse du folio tombe hors page : c'est le format de page qui découpe,
-// comme le recadrage de la feuille le faisait dans Revit.
+// Chaque folio devient un objet de formulaire qui ne contient QUE son propre
+// dessin (le flux de la feuille est trié, cf. « allègement »), placé cadré et
+// mis à l'échelle du format. Repli si le tri échoue : le PDF de la feuille
+// embarqué une seule fois et partagé par toutes les pages, chacune n'en
+// montrant que son folio -- juste, mais chaque page porte tout le carnet.
 var FORMATS_FOLIO = {A3:[1190.55, 841.89], A4:[841.89, 595.28]};  // pt, paysage
 
 function foliosDe(p){
@@ -2139,7 +2138,13 @@ function decouperEnFolios(p, octets){
           cadre.bottom = Math.min(cadre.bottom, c.b);
           cadre.top = Math.max(cadre.top, c.h);
         });
-        return sortie.embedPage(sp, cadre).then(function(emb){
+        // Voie normale : un formulaire PAR FOLIO, réduit à son propre dessin
+        // (cf. « allègement »). Repli : l'ancien formulaire unique partagé,
+        // si le flux de Revit contient quelque chose qu'on ne sait pas trier.
+        var folio = null;
+        try{ folio = fabriqueFolios(src, sortie); }catch(e){ folio = null; }
+        var emb = folio ? Promise.resolve(null) : sortie.embedPage(sp, cadre);
+        return emb.then(function(emb){
           rects.forEach(function(c){
             var w = c.d - c.g, h = c.h - c.b;
             if(w < 1 || h < 1) return;
@@ -2151,10 +2156,20 @@ function decouperEnFolios(p, octets){
             var pl = couche ? P[1] : P[0], ph = couche ? P[0] : P[1];
             var pg = sortie.addPage([pl, ph]);
             if(rot) pg.setRotation(PDFLib.degrees(rot));
-            pg.drawPage(emb, {
-              x: (pl - s * w) / 2 - s * (c.g - cadre.left),
-              y: (ph - s * h) / 2 - s * (c.b - cadre.bottom),
-              xScale: s, yScale: s});
+            var x = (pl - s * w) / 2, y = (ph - s * h) / 2;
+            if(folio){
+              var nm = pg.node.newXObject("Folio", folio(c));
+              pg.pushOperators(
+                PDFLib.pushGraphicsState(),
+                PDFLib.concatTransformationMatrix(s, 0, 0, s, x - s * c.g, y - s * c.b),
+                PDFLib.drawObject(nm),
+                PDFLib.popGraphicsState());
+            }else{
+              pg.drawPage(emb, {
+                x: x - s * (c.g - cadre.left),
+                y: y - s * (c.b - cadre.bottom),
+                xScale: s, yScale: s});
+            }
           });
           if(!sortie.getPageCount()) return octets;   // rien de cadrable
           return sortie.save();
@@ -2163,11 +2178,451 @@ function decouperEnFolios(p, octets){
     });
 }
 
+// ------------------------------------------------ allègement des PDF exportés
+// DEBUT ALLEGEMENT (bloc repris tel quel par le banc d'essai hors Revit)
+//
+// Le PDF de Revit est 100 % vectoriel. Deux choses le font enfler :
+//  1. ses coordonnées ont 5 décimales, soit 0,00002 mm sur un carnet. On les
+//     arrondit au pas de 0,05 mm du papier, invisible à l'impression : -35 %
+//     sur le carnet 21 ;
+//  2. chaque folio embarquait le carnet ENTIER et n'en montrait qu'un
+//     cartouche. On trie donc le dessin : chaque folio ne garde que les traits
+//     et textes qui touchent son cadre (+ marge), ce qui allège le fichier ET
+//     l'impression (l'imprimante ne traite plus tout le carnet à chaque page).
+// On ne touche qu'aux ORDRES DE DESSIN : tout ce qui change l'état graphique
+// (couleurs, épaisseurs, q/Q, cm, découpes W, contenu marqué) est gardé tel
+// quel, sinon la suite du dessin changerait d'aspect. En cas de doute (image
+// en ligne, flux illisible), on renonce et on garde l'export d'origine.
+var PAS_ARRONDI_MM = 0.05;      // pas des coordonnées, en mm sur le papier
+var MARGE_TRAIT_MM = 5;         // tolérance autour du cadre pour les traits
+var MARGE_TEXTE = 0.3;          // textes : origine connue, pas la longueur
+
+function flux2txt(u){
+  var out = [], N = 32768;
+  for(var i = 0; i < u.length; i += N)
+    out.push(String.fromCharCode.apply(null, u.subarray(i, i + N)));
+  return out.join("");
+}
+
+function txt2octets(s){
+  var u = new Uint8Array(s.length);
+  for(var i = 0; i < s.length; i++) u[i] = s.charCodeAt(i) & 0xFF;
+  return u;
+}
+
+// flux de contenu d'une page (un ou plusieurs), décodés et mis bout à bout
+function contenuBrut(page){
+  var c = page.node.Contents(), ctx = page.node.context, L = PDFLib;
+  var liste = [];
+  if(c instanceof L.PDFArray){
+    for(var i = 0; i < c.size(); i++) liste.push(c.lookup(i));
+  }else if(c){
+    liste.push(c);
+  }
+  return liste.map(function(s){
+    if(s instanceof L.PDFRawStream) return flux2txt(L.decodePDFRawStream(s).decode());
+    if(s instanceof L.PDFContentStream) return flux2txt(s.getUnencodedContents());
+    throw new Error("flux de contenu illisible");
+  }).join("\n");
+}
+
+// mm du papier par unité de l'espace utilisateur (Revit pose /UserUnit sur
+// les carnets de plus de 5 m)
+function mmParUnite(page){
+  var uu = 1;
+  try{
+    var n = page.node.get(PDFLib.PDFName.of("UserUnit"));
+    if(n && n.asNumber) uu = n.asNumber() || 1;
+  }catch(e){}
+  return uu * 25.4 / 72;
+}
+
+// Découpe le flux en ÉLÉMENTS typés : un tracé (de son premier m/re à son
+// ordre de peinture), un bloc de texte (BT..ET), un Do, ou UN ordre d'état.
+// Les éléments dessinés portent leur emprise dans l'espace de la page.
+var E_BRUT = 0, E_TRACE = 1, E_TEXTE = 2, E_IMAGE = 3, E_Q = 4, E_FQ = 5,
+    E_MC = 6, E_FMC = 7, E_REGLE = 8, E_REGLE_MULT = 9, E_DESSIN = 10;
+// réglages dont seule la DERNIÈRE valeur compte avant un dessin
+var REGLAGES = {RG:1, rg:1, G:1, g:1, K:1, k:1, CS:1, cs:1, SC:1, SCN:1, sc:1,
+  scn:1, w:1, J:1, j:1, M:1, d:1, ri:1, i:1, Tc:1, Tw:1, Tz:1, TL:1, Tf:1,
+  Tr:1, Ts:1};
+
+function sorteEtat(op){
+  if(op === "q") return E_Q;
+  if(op === "Q") return E_FQ;
+  if(op === "BMC" || op === "BDC") return E_MC;
+  if(op === "EMC") return E_FMC;
+  if(REGLAGES[op]) return E_REGLE;
+  if(op === "gs") return E_REGLE_MULT;
+  if(op === "sh") return E_DESSIN;
+  return E_BRUT;
+}
+
+function analyserContenu(src, mmU, images){
+  var n = src.length, i = 0;
+  var txt = [], kind = [], bb = [], alt = [], nom = [], cle = [];
+  var ops = [];                           // opérandes {t, v}
+  var ctm = [1,0,0,1,0,0], pile = [];
+  var pasPage = PAS_ARRONDI_MM / mmU, dec = 0;
+  var chemin = null, cbb = null, clip = false;
+  var texte = null, tbb = null, tetat = null, lm = null;
+
+  function decimales(){
+    var sc = Math.sqrt(Math.abs(ctm[0] * ctm[3] - ctm[1] * ctm[2])) || 1;
+    dec = Math.max(0, Math.min(6, Math.ceil(-Math.log(pasPage / sc) / Math.LN10)));
+  }
+  decimales();
+  function fmt(v){
+    var s = v.toFixed(dec);
+    if(dec > 0) s = s.replace(/0+$/, "").replace(/\.$/, "");
+    if(s === "-0") s = "0";
+    return s.replace(/^(-?)0\./, "$1.");
+  }
+  function pt(x, y, b){
+    var X = ctm[0]*x + ctm[2]*y + ctm[4], Y = ctm[1]*x + ctm[3]*y + ctm[5];
+    if(X < b[0]) b[0] = X; if(Y < b[1]) b[1] = Y;
+    if(X > b[2]) b[2] = X; if(Y > b[3]) b[3] = Y;
+  }
+  function vide(){ return [Infinity, Infinity, -Infinity, -Infinity]; }
+  function brut(){ return ops.map(function(o){ return o.t; }).join(" "); }
+  function el(t, k, b, a, nm, c){
+    txt.push(t); kind.push(k); bb.push(b || null); alt.push(a || null);
+    nom.push(nm || null); cle.push(c || null);
+  }
+  function ESPACE(c){ return c === 32 || c === 10 || c === 13 || c === 9 || c === 12 || c === 0; }
+  function DELIM(c){ return c === 40 || c === 41 || c === 60 || c === 62 || c === 91 ||
+                            c === 93 || c === 123 || c === 125 || c === 47 || c === 37; }
+  function finChaine(j){                   // j sur "(" -> indice après ")"
+    var prof = 0;
+    for(; j < n; j++){
+      var c = src.charCodeAt(j);
+      if(c === 92){ j++; continue; }
+      if(c === 40) prof++;
+      else if(c === 41 && --prof === 0) return j + 1;
+    }
+    throw new Error("chaîne non fermée");
+  }
+  function finGroupe(j, ouv){              // tableaux [..] et dictionnaires <<..>>
+    var prof = 0;
+    while(j < n){
+      var c = src.charCodeAt(j);
+      if(c === 40){ j = finChaine(j); continue; }
+      if(ouv === 91){
+        if(c === 91) prof++;
+        else if(c === 93 && --prof === 0) return j + 1;
+        j++;
+      }else{
+        if(c === 60 && src.charCodeAt(j+1) === 60){ prof++; j += 2; continue; }
+        if(c === 62 && src.charCodeAt(j+1) === 62){ if(--prof === 0) return j + 2; j += 2; continue; }
+        j++;
+      }
+    }
+    throw new Error("groupe non fermé");
+  }
+  var NB = /^[+-]?(\d+\.?\d*|\.\d+)$/;
+
+  while(i < n){
+    var c = src.charCodeAt(i);
+    if(ESPACE(c)){ i++; continue; }
+    if(c === 37){ while(i < n && src.charCodeAt(i) !== 10 && src.charCodeAt(i) !== 13) i++; continue; }
+    var j;
+    if(c === 40){ j = finChaine(i); ops.push({t:src.substring(i, j), v:NaN}); i = j; continue; }
+    if(c === 91){ j = finGroupe(i, 91); ops.push({t:src.substring(i, j), v:NaN}); i = j; continue; }
+    if(c === 60){
+      if(src.charCodeAt(i+1) === 60) j = finGroupe(i, 60);
+      else { j = src.indexOf(">", i); if(j < 0) throw new Error("hexa"); j++; }
+      ops.push({t:src.substring(i, j), v:NaN}); i = j; continue;
+    }
+    j = i + 1;
+    while(j < n){ var d = src.charCodeAt(j); if(ESPACE(d) || DELIM(d)) break; j++; }
+    var tok = src.substring(i, j);
+    i = j;
+    if(c === 47){ ops.push({t:tok, v:NaN}); continue; }
+    if(NB.test(tok)){ ops.push({t:tok, v:parseFloat(tok)}); continue; }
+
+    // ---- un opérateur
+    var op = tok, v = ops.map(function(o){ return o.v; });
+    if(op === "BI" || op === "ID" || op === "EI") throw new Error("image en ligne");
+    var ligne = brut() + (ops.length ? " " : "") + op;
+
+    if(texte){
+      if(op === "ET"){
+        texte.push("ET");
+        if(tbb[0] <= tbb[2]) el(texte.join("\n"), E_TEXTE, tbb, tetat);
+        else el(texte.join("\n"), E_DESSIN);
+        texte = null;
+      }else{
+        texte.push(ligne);
+        if(op === "Tm" && v.length === 6){
+          lm = v.slice(); pt(lm[4], lm[5], tbb);
+        }else if((op === "Td" || op === "TD") && v.length === 2){
+          lm[4] += v[0]*lm[0] + v[1]*lm[2]; lm[5] += v[0]*lm[1] + v[1]*lm[3];
+          pt(lm[4], lm[5], tbb);
+          if(op === "TD") tetat.push([fmt(-v[1]) + " TL", "TL"]);
+        }else if(op === '"' && v.length >= 2){
+          tetat.push([ops[0].t + " Tw", "Tw"]); tetat.push([ops[1].t + " Tc", "Tc"]);
+        }else if(op !== "Tj" && op !== "TJ" && op !== "'" && op !== "T*"){
+          tetat.push([ligne, op]);        // état de texte, couleurs, contenu marqué
+        }
+      }
+      ops = []; continue;
+    }
+
+    if(op === "m" || op === "l" || op === "c" || op === "v" || op === "y" || op === "re" || op === "h"){
+      if(!chemin){ chemin = []; cbb = vide(); clip = false; }
+      if(op === "re" && v.length === 4){
+        pt(v[0], v[1], cbb); pt(v[0] + v[2], v[1] + v[3], cbb);
+        pt(v[0] + v[2], v[1], cbb); pt(v[0], v[1] + v[3], cbb);
+      }else{
+        for(var k = 0; k + 1 < v.length; k += 2) pt(v[k], v[k+1], cbb);
+      }
+      chemin.push(ops.map(function(o){ return isNaN(o.v) ? o.t : fmt(o.v); }).join(" ") +
+                  (ops.length ? " " : "") + op);
+      ops = []; continue;
+    }
+    if(op === "W" || op === "W*"){
+      if(!chemin){ chemin = []; cbb = vide(); }
+      chemin.push(op); clip = true; ops = []; continue;
+    }
+    if(op === "S" || op === "s" || op === "f" || op === "F" || op === "f*" || op === "B" ||
+       op === "B*" || op === "b" || op === "b*" || op === "n"){
+      var corps = (chemin ? chemin.join("\n") + "\n" : "") + op;
+      if(clip) el(corps, E_BRUT);                     // découpe : on la garde
+      else if(chemin && cbb[0] <= cbb[2] && op !== "n") el(corps, E_TRACE, cbb);
+      chemin = null; clip = false; ops = []; continue;
+    }
+
+    if(op === "BT"){
+      texte = ["BT"]; tbb = vide(); tetat = []; lm = [1,0,0,1,0,0];
+    }else if(op === "Do" && ops.length){
+      var nm = ops[0].t.substring(1);
+      if(images[nm]){
+        var b = vide(); pt(0, 0, b); pt(1, 1, b); pt(1, 0, b); pt(0, 1, b);
+        el(ligne, E_IMAGE, b, null, nm);
+      }else{
+        el(ligne, E_DESSIN, null, null, nm);
+      }
+    }else{
+      if(op === "q") pile.push(ctm.slice());
+      else if(op === "Q"){ ctm = pile.pop() || ctm; decimales(); }
+      else if(op === "cm" && v.length === 6){
+        var m = v, a = ctm;
+        ctm = [m[0]*a[0] + m[1]*a[2], m[0]*a[1] + m[1]*a[3],
+               m[2]*a[0] + m[3]*a[2], m[2]*a[1] + m[3]*a[3],
+               m[4]*a[0] + m[5]*a[2] + a[4], m[4]*a[1] + m[5]*a[3] + a[5]];
+        decimales();
+      }
+      el(ligne, sorteEtat(op), null, null, null, op);
+    }
+    ops = [];
+  }
+  if(texte) throw new Error("BT sans ET");
+  if(chemin) el(chemin.join("\n"), E_BRUT);
+  return {txt:txt, kind:kind, bb:bb, alt:alt, nom:nom, cle:cle, mmU:mmU};
+}
+
+// Contenu d'un folio : r = {g, d, b, h} dans l'espace de la page, ou null
+// (tout garder : arrondi seul). Renvoie le texte et les XObject utilisés.
+//
+// Tri des dessins, puis NETTOYAGE de l'état, sans quoi chaque folio traînait
+// les ~650 Ko d'ordres d'état du carnet entier (un groupe q..Q, une découpe de
+// vue et des marqueurs par élément) :
+//  - un groupe q..Q sans aucun dessin gardé disparaît en entier (Q restaure
+//    l'état : rien de ce qu'il contient ne compte après lui) ;
+//  - un marqueur BMC/BDC..EMC vide disparaît (ses réglages restent) ;
+//  - un réglage (couleur, épaisseur...) n'est écrit qu'au moment d'un dessin
+//    gardé, et seule sa dernière valeur. Ceux posés dans un groupe PARENT
+//    sont réinsérés avant le q du groupe enfant, pour survivre à son Q.
+// q..Q et BMC..EMC s'entrecroisent chez Revit : deux piles séparées.
+function contenuFolio(A, r){
+  var xo = {}, i;
+  if(!r){
+    for(i = 0; i < A.txt.length; i++) if(A.nom[i]) xo[A.nom[i]] = true;
+    return {txt:A.txt.join("\n"), xo:xo};
+  }
+  var mt = MARGE_TRAIT_MM / A.mmU;
+  var mx = MARGE_TEXTE * Math.max(r.d - r.g, r.h - r.b);
+  var out = [];
+  var qs = [{i:-1, pend:[], cles:{}}];    // groupes q ouverts (0 = la page)
+  var mcs = [];                           // marqueurs ouverts {i, t, vu}
+
+  function regler(t, c){
+    var f = qs[qs.length - 1];
+    if(c){
+      if(f.cles[c] !== undefined) f.pend[f.cles[c]] = null;
+      f.cles[c] = f.pend.length;
+    }
+    f.pend.push(t);
+  }
+  function decaler(depuis, n){
+    for(var k = 1; k < qs.length; k++) if(qs[k].i >= depuis) qs[k].i += n;
+    for(k = 0; k < mcs.length; k++) if(mcs[k].i >= depuis) mcs[k].i += n;
+  }
+  function dessiner(t){
+    for(var L = qs.length - 1; L >= 0; L--){
+      var f = qs[L], p = f.pend.filter(function(x){ return x !== null; });
+      if(p.length){
+        if(L === qs.length - 1) Array.prototype.push.apply(out, p);
+        else{
+          var pos = qs[L + 1].i;
+          out.splice.apply(out, [pos, 0].concat(p));
+          decaler(pos, p.length);
+        }
+      }
+      f.pend = []; f.cles = {}; f.vu = true;
+    }
+    for(var k = 0; k < mcs.length; k++) mcs[k].vu = true;
+    out.push(t);
+  }
+  function dedans(b, m){
+    return !(b[2] < r.g - m || b[0] > r.d + m || b[3] < r.b - m || b[1] > r.h + m);
+  }
+
+  for(i = 0; i < A.txt.length; i++){
+    var k = A.kind[i], t = A.txt[i];
+    if(k === E_TRACE || k === E_IMAGE){
+      if(dedans(A.bb[i], mt)){ dessiner(t); if(A.nom[i]) xo[A.nom[i]] = true; }
+    }else if(k === E_TEXTE){
+      if(dedans(A.bb[i], mx)) dessiner(t);
+      else (A.alt[i] || []).forEach(function(a){
+        // texte écarté : ses réglages restent (Tf, couleur...), ses
+        // marqueurs éventuels aussi, tels quels
+        if(REGLAGES[a[1]]) regler(a[0], a[1]);
+        else out.push(a[0]);
+      });
+    }else if(k === E_DESSIN){
+      dessiner(t); if(A.nom[i]) xo[A.nom[i]] = true;
+    }else if(k === E_REGLE){
+      regler(t, A.cle[i]);
+    }else if(k === E_REGLE_MULT){
+      regler(t, null);
+    }else if(k === E_Q){
+      qs.push({i:out.length, pend:[], cles:{}, vu:false});
+      out.push(t);
+    }else if(k === E_FQ){
+      if(qs.length < 2){ out.push(t); continue; }
+      var f = qs.pop();
+      if(f.vu){ out.push(t); continue; }
+      // groupe vide : on coupe tout depuis son q, sauf les marqueurs encore
+      // ouverts qu'il contenait (ils se ferment plus loin)
+      var ouverts = mcs.filter(function(m){ return m.i > f.i; });
+      out.length = f.i;
+      ouverts.forEach(function(m){ m.i = out.length; out.push(m.t); });
+    }else if(k === E_MC){
+      mcs.push({i:out.length, t:t, vu:false});
+      out.push(t);
+    }else if(k === E_FMC){
+      var m = mcs.pop();
+      if(!m || m.vu){ out.push(t); continue; }
+      out.splice(m.i, 1);
+      decaler(m.i + 1, -1);
+    }else{
+      out.push(t);                        // découpe, cm, ordres inconnus
+    }
+  }
+  return {txt:out.join("\n"), xo:xo};
+}
+
+// noms des XObject IMAGES de la page (les seuls dont on connaît l'emprise :
+// le carré unité sous la matrice courante)
+function imagesDeLaPage(page){
+  var L = PDFLib, res = page.node.Resources(), out = {};
+  var xd = res && res.lookup(L.PDFName.of("XObject"));
+  if(!(xd instanceof L.PDFDict)) return out;
+  xd.entries().forEach(function(e){
+    try{
+      var s = xd.lookup(e[0]);
+      if(s && s.dict && s.dict.get(L.PDFName.of("Subtype")) === L.PDFName.of("Image"))
+        out[e[0].asString().substring(1)] = true;
+    }catch(er){}
+  });
+  return out;
+}
+
+function analyserPage(page){
+  return analyserContenu(contenuBrut(page), mmParUnite(page), imagesDeLaPage(page));
+}
+
+// point 1 seul : réécrit le contenu de chaque page, coordonnées arrondies.
+// Les anciens flux sont RETIRÉS du document (pdf-lib écrit tout objet
+// enregistré, même orphelin).
+function arrondirDoc(doc){
+  var L = PDFLib, ctx = doc.context;
+  doc.getPages().forEach(function(pg){
+    var A = analyserPage(pg);
+    var neuf = ctx.flateStream(txt2octets(contenuFolio(A, null).txt));
+    var c = pg.node.get(L.PDFName.of("Contents"));
+    var refs = [];
+    if(c instanceof L.PDFRef) refs.push(c);
+    else if(c instanceof L.PDFArray)
+      for(var i = 0; i < c.size(); i++){ var e = c.get(i); if(e instanceof L.PDFRef) refs.push(e); }
+    var cible = ctx.lookup(refs[0]);
+    if(refs.length && cible instanceof L.PDFArray) throw new Error("contenu imbriqué");
+    if(refs.length){
+      ctx.assign(refs[0], neuf);
+      refs.slice(1).forEach(function(r){ ctx.delete(r); });
+      pg.node.set(L.PDFName.of("Contents"), refs[0]);
+    }else{
+      pg.node.set(L.PDFName.of("Contents"), ctx.register(neuf));
+    }
+  });
+}
+
+function octetsArrondis(octets){
+  return chargerFusion()
+    .then(function(){ return PDFLib.PDFDocument.load(octets); })
+    .then(function(doc){ arrondirDoc(doc); return doc.save(); })
+    ["catch"](function(){ return octets; });   // au pire : l'original
+}
+
+// Prépare, dans le document de sortie, un objet de formulaire PAR FOLIO ne
+// contenant que son dessin. Les ressources communes (polices, états
+// graphiques) sont copiées une seule fois ; les images, seulement si un folio
+// s'en sert. Renvoie une fonction folio(c) -> réf. du formulaire.
+function fabriqueFolios(src, sortie){
+  var L = PDFLib, sp = src.getPage(0);
+  var A = analyserPage(sp);
+  var cop = L.PDFObjectCopier.for(src.context, sortie.context);
+  var res = sp.node.Resources(), communs = [], xd = null;
+  if(res) res.entries().forEach(function(e){
+    if(e[0] === L.PDFName.of("XObject")) xd = res.lookup(e[0]);
+    else{
+      // objet INDIRECT, partagé par tous les folios : un dictionnaire direct
+      // serait réécrit en entier dans chacun (les /Properties des contenus
+      // marqués de Revit : ~1,4 Mo de plus sur un carnet de 79 folios)
+      var o = cop.copy(e[1]);
+      if(!(o instanceof L.PDFRef)) o = sortie.context.register(o);
+      communs.push([e[0], o]);
+    }
+  });
+  return function(c){
+    var cf = contenuFolio(A, c);
+    var rd = sortie.context.obj({});
+    communs.forEach(function(e){ rd.set(e[0], e[1]); });
+    if(xd instanceof L.PDFDict){
+      var xo = sortie.context.obj({});
+      Object.keys(cf.xo).forEach(function(nm){
+        var r = xd.get(L.PDFName.of(nm));
+        if(r) xo.set(L.PDFName.of(nm), cop.copy(r));
+      });
+      rd.set(L.PDFName.of("XObject"), xo);
+    }
+    // cadre du formulaire = le folio + 1 mm : le trait du cartouche, posé
+    // pile sur sa limite, n'est pas rogné de moitié
+    var e = 1 / A.mmU;
+    var f = sortie.context.flateStream(txt2octets(cf.txt), {
+      Type:"XObject", Subtype:"Form", FormType:1,
+      BBox:[c.g - e, c.b - e, c.d + e, c.h + e], Resources:rd});
+    return sortie.context.register(f);
+  };
+}
+// FIN ALLEGEMENT
+
 // octets d'un plan tels qu'on les enregistre : annotations gravées, puis
-// découpe en folios si elle est demandée
+// découpe en folios si elle est demandée, sinon simple arrondi des coordonnées
 function octetsPourExport(p){
   return octetsAnnotes(p).then(function(u){
-    return decoupeDemandee(p) ? decouperEnFolios(p, u) : u;
+    return decoupeDemandee(p) ? decouperEnFolios(p, u) : octetsArrondis(u);
   });
 }
 
