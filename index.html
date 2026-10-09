@@ -432,7 +432,7 @@ document.write('<script src="donnees.js' + window.FRAIS + '"><\/script>');
 // 10 minutes. On compare donc le numero grave ici a celui du serveur, et on
 // se recharge sur une adresse que le cache ne connait pas.
 (function(){
-  var ici = "20261009153329";
+  var ici = "20261009153645";
   if(ici.charAt(0) === "{") return;                  // dossier de developpement
   var enLigne = (typeof VERSION !== "undefined") ? VERSION : null;
 
@@ -881,7 +881,16 @@ function rendu(){
   });
   tache.promise.then(function(){
     if(mien!==jeton) return;
-    tuile={cv:off, zoom:zi, panX:pxi, panY:pyi, dpr:dpr};
+    // Hors de la page (gros numero de folio au-dessus des cartouches d'un
+    // carnet) le trait noir tombe sur le fond sombre : on en garde une copie
+    // passee en BLANC, dessinee seulement en dehors de la page.
+    var bl=document.createElement("canvas");
+    bl.width=w; bl.height=h;
+    var bc=bl.getContext("2d");
+    bc.drawImage(off,0,0);
+    bc.globalCompositeOperation="source-in";
+    bc.fillStyle="#fff"; bc.fillRect(0,0,w,h);
+    tuile={cv:off, blanc:bl, zoom:zi, panX:pxi, panY:pyi, dpr:dpr};
     dessiner();
   })["catch"](function(){ /* rendu annule pendant une manipulation : normal */ });
 }
@@ -915,9 +924,18 @@ function dessiner(){
   if(tuile){
     var k=zoom/tuile.zoom;
     var s=versEcran({x:(0-tuile.panX)/tuile.zoom, y:(0-tuile.panY)/tuile.zoom});
+    var tw=tuile.cv.width/tuile.dpr*k, th=tuile.cv.height/tuile.dpr*k;
+    var pw=plan._pt[0]*zoom, ph=plan._pt[1]*zoom;
     ctx.imageSmoothingEnabled=true; ctx.imageSmoothingQuality="high";
-    ctx.drawImage(tuile.cv, s.x, s.y,
-                  tuile.cv.width/tuile.dpr*k, tuile.cv.height/tuile.dpr*k);
+    ctx.save();
+    ctx.beginPath(); ctx.rect(panX,panY,pw,ph); ctx.clip();
+    ctx.drawImage(tuile.cv, s.x, s.y, tw, th);
+    ctx.restore();
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0,0,r.width,r.height); ctx.rect(panX,panY,pw,ph);
+    ctx.clip("evenodd");
+    ctx.drawImage(tuile.blanc, s.x, s.y, tw, th);
+    ctx.restore();
   }
 
   dessinerAnnots();
