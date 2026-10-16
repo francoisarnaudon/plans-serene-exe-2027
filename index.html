@@ -57,6 +57,17 @@ aside{background:var(--bg2);border-right:1px solid var(--bd);display:flex;flex-d
   vertical-align:1px;
 }
 .item.on .d{color:#9fb3c8}
+.niv{
+  display:flex;align-items:center;gap:6px;width:100%;text-align:left;
+  margin:10px 0 3px;padding:5px 8px;border-radius:6px;
+  color:#aab7c6;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  border-bottom:1px solid var(--bd);
+}
+.niv:first-child{margin-top:2px}
+.niv:hover{background:#2b323b;color:var(--fg)}
+.niv .fl{display:inline-block;width:10px;transition:transform .15s}
+.niv.ferme .fl{transform:rotate(-90deg)}
+.niv .nb{margin-left:auto;font-weight:400;color:#79838f;letter-spacing:0}
 .empty{padding:20px 12px;color:var(--fg2);font-size:12.5px;text-align:center}
 
 main{display:flex;flex-direction:column;min-width:0;min-height:0;background:#14171b}
@@ -167,6 +178,8 @@ select{
   font-size:12.5px;cursor:pointer;
 }
 #expo label:hover{background:#2b323b}
+#expo .niv{margin:8px 0 2px;cursor:pointer}
+#expo .niv:first-child{margin-top:0}
 #expo label span{color:var(--fg2)}
 #expo .rangee{display:flex;gap:8px;margin-top:12px}
 #expo button{
@@ -432,7 +445,7 @@ document.write('<script src="donnees.js' + window.FRAIS + '"><\/script>');
 // 10 minutes. On compare donc le numero grave ici a celui du serveur, et on
 // se recharge sur une adresse que le cache ne connait pas.
 (function(){
-  var ici = "20261016213055";
+  var ici = "20261016214217";
   if(ici.charAt(0) === "{") return;                  // dossier de developpement
   var enLigne = (typeof VERSION !== "undefined") ? VERSION : null;
 
@@ -613,6 +626,8 @@ function demanderMotDePasse(){
 }
 
 // ---------------------------------------------------------------- liste
+var replies = {};            // rubriques repliees (par intitule de niveau)
+try{ replies = JSON.parse(localStorage.getItem("fa_replies")||"{}") || {}; }catch(e){}
 function listerPlans(){
   var q=$("q").value.trim().toLowerCase();
   filtre = q ? PLANS.filter(function(p){
@@ -625,7 +640,28 @@ function listerPlans(){
     : filtre.length+" / "+PLANS.length+" plan"+(PLANS.length>1?"s":"");
   if(!filtre.length){ l.innerHTML='<div class="empty">Aucun plan ne correspond.</div>'; return; }
 
+  // Rubriques par niveau (`niveau`, pose par l'outil Revit). Un site publie
+  // avant cette fonction n'en a pas : liste a plat, comme avant.
+  var avecNiv = filtre.some(function(p){ return p.niveau; });
+  var courant = null, ferme = false;
   filtre.forEach(function(p){
+    if(avecNiv && (p.niveau||"") !== courant){
+      courant = p.niveau||"";
+      // pendant une recherche, tout reste deplie : on veut voir les resultats
+      ferme = !q && !!replies[courant] && !(plan && plan.niveau===courant);
+      var h=document.createElement("button");
+      h.className="niv"+(ferme?" ferme":"");
+      h.innerHTML='<span class="fl">&#9662;</span><span class="tn"></span><span class="nb"></span>';
+      h.children[1].textContent=courant;
+      h.children[2].textContent=filtre.filter(function(x){ return (x.niveau||"")===courant; }).length;
+      h.onclick=(function(n, f){ return function(){
+        if(f) delete replies[n]; else replies[n]=1;
+        try{ localStorage.setItem("fa_replies", JSON.stringify(replies)); }catch(e){}
+        listerPlans();
+      }; })(courant, ferme);
+      l.appendChild(h);
+    }
+    if(ferme) return;
     var b=document.createElement("button");
     b.className="item"+(plan&&p.id===plan.id?" on":"");
     b.innerHTML='<div class="n"></div><div class="t"></div><div class="d"></div>';
@@ -2697,10 +2733,25 @@ function boutonsExpo(actifs){
 function ouvrirExpo(){
   var l = $("expoListe");
   l.innerHTML = "";
+  var courant = null;
   PLANS.forEach(function(p){
+    if(p.niveau && p.niveau !== courant){
+      // clic sur la rubrique = coche / decoche tout le niveau
+      courant = p.niveau;
+      var h = document.createElement("div");
+      h.className = "niv"; h.textContent = courant;
+      h.title = "Cocher / décocher tout le niveau";
+      h.onclick = (function(n){ return function(){
+        var cs = [].filter.call(document.querySelectorAll("#expoListe input"),
+                   function(c){ return c.dataset.niv === n; });
+        var tout = cs.every(function(c){ return c.checked; });
+        cs.forEach(function(c){ c.checked = !tout; });
+      }; })(courant);
+      l.appendChild(h);
+    }
     var lab = document.createElement("label");
     var c = document.createElement("input");
-    c.type = "checkbox"; c.value = p.id;
+    c.type = "checkbox"; c.value = p.id; c.dataset.niv = p.niveau || "";
     c.checked = !!(plan && p.id === plan.id);
     lab.appendChild(c);
     lab.appendChild(document.createTextNode(p.num + " "));
