@@ -445,7 +445,7 @@ document.write('<script src="donnees.js' + window.FRAIS + '"><\/script>');
 // 10 minutes. On compare donc le numero grave ici a celui du serveur, et on
 // se recharge sur une adresse que le cache ne connait pas.
 (function(){
-  var ici = "20261027165037";
+  var ici = "20261027165840";
   if(ici.charAt(0) === "{") return;                  // dossier de developpement
   var enLigne = (typeof VERSION !== "undefined") ? VERSION : null;
 
@@ -999,17 +999,55 @@ function dessinerReperes(){
   if(!l || !l.length || !k || !plan._pap) return;
   var m = plan._pap.mm;
   ctx.save();
-  ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.lineJoin = "round";
+  ctx.textBaseline = "middle"; ctx.lineJoin = "round";
   l.forEach(function(r){
     var c = r.rect_mm, hmm = r.h_mm || (c[3] - c[1]);
     var px = hmm / 0.72 / k * zoom;           // corps de police ~ hauteur / 0,72
     if(px < 4) return;
-    var q = versEcran({x:((c[0] + c[2]) / 2 - m[0]) / k,
-                       y:(m[3] - (c[1] + c[3]) / 2) / k});
     ctx.font = px.toFixed(1) + "px Arial,sans-serif";
+    // renvoi à la ligne sur la largeur de la zone de texte Revit
+    // La police du navigateur n'a pas la chasse de celle de Revit : on vise le
+    // NOMBRE de lignes que Revit affiche (hauteur de l'emprise / interligne,
+    // 1,676 x la taille du texte pour une ligne), quitte à élargir la coupure
+    // puis à réduire le corps si une ligne déborde de la zone de texte.
+    var largPx = (r.larg_mm || 0) / k * zoom, hautPx = (c[3] - c[1]) / k * zoom;
+    var nRevit = Math.max(1, Math.round((c[3] - c[1]) / (1.676 * hmm)));
+    var pars = String(r.txt).split(/\r\n|[\r\n\v]/);   // \v = Maj+Entrée Revit
+    function couper(lim){
+      var out = [];
+      pars.forEach(function(par){
+        var mots = par.split(/\s+/).filter(Boolean), cour = "";
+        mots.forEach(function(w){
+          var t = cour ? cour + " " + w : w;
+          if(cour && lim > 0 && ctx.measureText(t).width > lim){
+            out.push(cour); cour = w;
+          }else cour = t;
+        });
+        out.push(cour);
+      });
+      return out;
+    }
+    var lim = largPx, lignes = couper(lim);
+    while(largPx > 0 && lignes.length > Math.max(nRevit, pars.length) && lim < largPx * 3){
+      lim *= 1.05; lignes = couper(lim);
+    }
+    var wMax = 0;
+    lignes.forEach(function(t){ wMax = Math.max(wMax, ctx.measureText(t).width); });
+    if(largPx > 0 && wMax > largPx){
+      px *= largPx / wMax; ctx.font = px.toFixed(1) + "px Arial,sans-serif";
+    }
+    // bloc de lignes centré dans l'emprise Revit, ligne à ligne
+    var al = r.align || "c";
+    ctx.textAlign = al === "g" ? "left" : al === "d" ? "right" : "center";
+    var xmm = al === "g" ? c[0] : al === "d" ? c[2] : (c[0] + c[2]) / 2;
+    var pas = Math.min(px * 1.3, hautPx / lignes.length);
+    var q = versEcran({x:(xmm - m[0]) / k, y:(m[3] - (c[1] + c[3]) / 2) / k});
+    var y0 = q.y - pas * (lignes.length - 1) / 2;
     ctx.lineWidth = Math.max(2, px * 0.08);
-    ctx.strokeStyle = "rgba(255,255,255,.9)"; ctx.strokeText(r.txt, q.x, q.y);
-    ctx.fillStyle = "#1b1f24"; ctx.fillText(r.txt, q.x, q.y);
+    lignes.forEach(function(t, i){
+      ctx.strokeStyle = "rgba(255,255,255,.9)"; ctx.strokeText(t, q.x, y0 + i * pas);
+      ctx.fillStyle = "#1b1f24"; ctx.fillText(t, q.x, y0 + i * pas);
+    });
   });
   ctx.restore();
 }
